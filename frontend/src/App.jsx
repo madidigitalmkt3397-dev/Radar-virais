@@ -25,6 +25,9 @@ function App() {
     'Criptomoedas e Web3'
   ];
 
+  // OBS: o backend atual (rota /api/search) só usa "query" e "max_results".
+  // Os campos "nicho" e "periodo" continuam na tela pra você escolher,
+  // mas hoje eles não são enviados pro backend (ele ainda não usa isso).
   const handlePesquisar = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -32,11 +35,9 @@ function App() {
     setTranscricoes({});
 
     try {
-      const response = await api.post('/api/radar', {
-        nicho,
-        palavra_chave: palavraChave,
-        periodo,
-        quantidade: parseInt(quantidade) || 5
+      const response = await api.post('/api/search', {
+        query: palavraChave,
+        max_results: parseInt(quantidade) || 5
       });
       setVideos(response.data.videos || []);
     } catch (err) {
@@ -51,7 +52,7 @@ function App() {
     setLoadingTranscript(prev => ({ ...prev, [videoId]: true }));
     try {
       const response = await api.post('/api/transcript', { video_id: videoId });
-      setTranscricoes(prev => ({ ...prev, [videoId]: response.data.transcricao }));
+      setTranscricoes(prev => ({ ...prev, [videoId]: response.data.transcript }));
     } catch (err) {
       console.error(err);
       setTranscricoes(prev => ({ ...prev, [videoId]: 'Erro ao carregar a transcrição.' }));
@@ -64,7 +65,7 @@ function App() {
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif', maxWidth: '1100px', margin: '0 auto', background: '#f4f6f9', minHeight: '100vh' }}>
       <header style={{ background: '#fff', padding: '20px', borderRadius: '8px', marginBottom: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
         <h1 style={{ margin: '0 0 5px 0', color: '#1a1a1a' }}>Radar de Virais 🚀</h1>
-        <p style={{ margin: 0, color: '#666' }}>Minere padrões de sucesso, métricas e transcrições para dominar seu nicho.</p>
+        <p style={{ margin: 0, color: '#666' }}>Minere padrões de sucesso e transcrições para dominar seu nicho.</p>
       </header>
 
       <form onSubmit={handlePesquisar} style={{ background: '#fff', padding: '20px', borderRadius: '8px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)', marginBottom: '20px' }}>
@@ -79,11 +80,11 @@ function App() {
 
         <div>
           <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Palavra-chave / Foco:</label>
-          <input 
-            type="text" 
-            value={palavraChave} 
-            onChange={(e) => setPalavraChave(e.target.value)} 
-            placeholder="Ex: inteligência artificial, renda extra..." 
+          <input
+            type="text"
+            value={palavraChave}
+            onChange={(e) => setPalavraChave(e.target.value)}
+            placeholder="Ex: inteligência artificial, renda extra..."
             style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
             required
           />
@@ -99,12 +100,12 @@ function App() {
 
         <div>
           <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Quantidade de Vídeos:</label>
-          <input 
-            type="number" 
-            value={quantidade} 
-            onChange={(e) => setQuantidade(e.target.value)} 
+          <input
+            type="number"
+            value={quantidade}
+            onChange={(e) => setQuantidade(e.target.value)}
             style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
-            min="1" 
+            min="1"
             max="20"
           />
         </div>
@@ -126,41 +127,42 @@ function App() {
 
         <div style={{ display: 'grid', gap: '20px' }}>
           {videos.map((video) => (
-            <div key={video.id} style={{ border: '1px solid #e1e4e8', padding: '20px', borderRadius: '8px', background: '#fff', display: 'flex', gap: '20px', alignItems: 'flex-start', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-              {video.thumbnail && <img src={video.thumbnail} alt={video.titulo} style={{ width: '180px', borderRadius: '6px', objectFit: 'cover' }} />}
-              <div style={{ flex: 1 }}>
-                <h3 style={{ margin: '0 0 8px 0', color: '#1f2328' }}>{video.titulo}</h3>
-                <p style={{ margin: '0 0 10px 0', color: '#57606a', fontSize: '14px' }}><strong>Canal:</strong> {video.canal} | <strong>Publicado em:</strong> {new Date(video.publishedAt).toLocaleDateString('pt-BR')}</p>
-                
-                <div style={{ display: 'flex', gap: '15px', background: '#f6f8fa', padding: '10px', borderRadius: '6px', marginBottom: '10px', fontSize: '13px', flexWrap: 'wrap' }}>
-                  <span>👀 <strong>{video.views.toLocaleString()}</strong> Views</span>
-                  <span>👍 <strong>{video.likes.toLocaleString()}</strong> Likes</span>
-                  <span>💬 <strong>{video.comments.toLocaleString()}</strong> Comentários</span>
-                  <span>🔥 <strong>{video.engagement_rate}%</strong> Engajamento</span>
-                </div>
+            <div key={video.id} style={{ border: '1px solid #e1e4e8', padding: '20px', borderRadius: '8px', background: '#fff', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
+              <h3 style={{ margin: '0 0 8px 0', color: '#1f2328' }}>{video.title}</h3>
+              <p style={{ margin: '0 0 10px 0', color: '#57606a', fontSize: '14px' }}>
+                <strong>Canal:</strong> {video.channelTitle} | <strong>Publicado em:</strong> {video.publishedAt ? new Date(video.publishedAt).toLocaleDateString('pt-BR') : '—'}
+              </p>
 
-                <div style={{ display: 'flex', gap: '15px', alignItems: 'center', marginBottom: '10px' }}>
-                  {video.url && (
-                    <a href={video.url} target="_blank" rel="noopener noreferrer" style={{ color: '#0969da', textDecoration: 'none', fontWeight: 'bold', fontSize: '14px' }}>
-                      🔗 Assistir no YouTube
-                    </a>
-                  )}
+              {video.description && (
+                <p style={{ margin: '0 0 12px 0', color: '#57606a', fontSize: '13px', maxHeight: '60px', overflow: 'hidden' }}>
+                  {video.description}
+                </p>
+              )}
 
-                  <button 
-                    onClick={() => handleBuscarTranscricao(video.id)}
-                    style={{ background: '#2ea44f', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
-                  >
-                    {loadingTranscript[video.id] ? 'Extraindo...' : '📝 Extrair Transcrição'}
-                  </button>
-                </div>
+              <div style={{ display: 'flex', gap: '15px', alignItems: 'center', marginBottom: '10px' }}>
+                <a
+                  href={`https://www.youtube.com/watch?v=${video.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: '#0969da', textDecoration: 'none', fontWeight: 'bold', fontSize: '14px' }}
+                >
+                  🔗 Assistir no YouTube
+                </a>
 
-                {transcricoes[video.id] && (
-                  <div style={{ marginTop: '10px', background: '#fffcf0', padding: '12px', borderRadius: '6px', border: '1px solid #fbe5a2', maxHeight: '150px', overflowY: 'auto' }}>
-                    <strong style={{ display: 'block', marginBottom: '5px', fontSize: '13px' }}>Transcrição Completa:</strong>
-                    <p style={{ margin: 0, fontSize: '12px', color: '#333', whiteSpace: 'pre-wrap' }}>{transcricoes[video.id]}</p>
-                  </div>
-                )}
+                <button
+                  onClick={() => handleBuscarTranscricao(video.id)}
+                  style={{ background: '#2ea44f', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+                >
+                  {loadingTranscript[video.id] ? 'Extraindo...' : '📝 Extrair Transcrição'}
+                </button>
               </div>
+
+              {transcricoes[video.id] && (
+                <div style={{ marginTop: '10px', background: '#fffcf0', padding: '12px', borderRadius: '6px', border: '1px solid #fbe5a2', maxHeight: '150px', overflowY: 'auto' }}>
+                  <strong style={{ display: 'block', marginBottom: '5px', fontSize: '13px' }}>Transcrição Completa:</strong>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#333', whiteSpace: 'pre-wrap' }}>{transcricoes[video.id]}</p>
+                </div>
+              )}
             </div>
           ))}
         </div>
