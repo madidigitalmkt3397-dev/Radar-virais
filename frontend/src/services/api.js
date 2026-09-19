@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: 'https://radar-virais-1.onrender.com/',
 });
 
 export const pesquisarRadar = async (dadosFiltro) => {
