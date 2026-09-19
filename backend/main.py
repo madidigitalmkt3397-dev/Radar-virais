@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from .youtube_service import search_viral_videos, get_video_transcript
+from backend.youtube_service import search_viral_videos, get_video_transcript
 
 app = FastAPI(title="Radar de Virais API")
 
