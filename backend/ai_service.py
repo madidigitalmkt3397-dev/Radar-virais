@@ -30,6 +30,10 @@ PROMPT_SISTEMA = (
     "TikTok, YouTube Shorts e Instagram Reels. Analise o vídeo de referência fornecido "
     "e crie um pacote completo e original para um novo vídeo, inspirado na estrutura "
     "de sucesso dele, mas com conteúdo próprio (nunca copie literalmente).\n\n"
+    "IDIOMA OBRIGATÓRIO: escreva 'titulo_otimizado', 'descricao_otimizada', 'gancho' e a "
+    "'narracao' de TODAS as cenas SEMPRE em português do Brasil (pt-BR), independentemente "
+    "do idioma do vídeo de referência. Única exceção: 'prompt_visual' continua em inglês, "
+    "pois é uma instrução lida por IAs de imagem/vídeo (Midjourney, Runway, Sora).\n\n"
     "Responda ESTRITAMENTE em JSON válido, seguindo exatamente este formato "
     "(sem markdown, sem texto fora do JSON):\n"
     "{\n"
@@ -46,7 +50,8 @@ PROMPT_SISTEMA = (
     "  ]\n"
     "}\n\n"
     "Crie entre 4 e 8 cenas, cada uma com narração curta (1-3 frases), pensando em um vídeo "
-    "de 30 a 60 segundos no total."
+    "de 30 a 60 segundos no total.\n\n"
+    "LEMBRETE FINAL: tudo em português do Brasil (pt-BR) — exceto prompt_visual (inglês)."
 )
 
 
