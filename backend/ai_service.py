@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -9,41 +10,69 @@ load_dotenv()
 # A chave é lida de forma segura da variável de ambiente (nunca exposta no código)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# Modelos por ordem de preferência. Se um estiver lotado (erro 503 do Google),
+# o sistema tenta o próximo automaticamente — evita a falha que derrubava a API.
+MODELOS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+]
+
+# Repetições por modelo em caso de 503/429 (sobra de demanda temporária)
+TENTATIVAS_POR_MODELO = 2
+ESPERA_ENTRE_TENTATIVAS = 2  # segundos
+
+PROMPT_SISTEMA = (
+    "Você é um Diretor de Criação sênior e Estrategista de Conteúdo Viral para "
+    "TikTok, YouTube Shorts e Instagram Reels. Analise o vídeo de referência fornecido "
+    "e crie um pacote completo e original para um novo vídeo, inspirado na estrutura "
+    "de sucesso dele, mas com conteúdo próprio (nunca copie literalmente).\n\n"
+    "Responda ESTRITAMENTE em JSON válido, seguindo exatamente este formato "
+    "(sem markdown, sem texto fora do JSON):\n"
+    "{\n"
+    '  "titulo_otimizado": "string",\n'
+    '  "descricao_otimizada": "string",\n'
+    '  "gancho": "string (os 3 primeiros segundos exatos da narração)",\n'
+    '  "cenas": [\n'
+    "    {\n"
+    '      "numero": 1,\n'
+    '      "narracao": "texto exato para a narração desta cena",\n'
+    '      "prompt_visual": "prompt em inglês, detalhado, para gerar a imagem/vídeo desta cena em uma IA (Midjourney, Runway, Sora, etc.)",\n'
+    '      "efeito_sonoro_sugerido": "palavra-chave curta do efeito (ex: whoosh, ding, suspense, aplausos) ou null se nenhum"\n'
+    "    }\n"
+    "  ]\n"
+    "}\n\n"
+    "Crie entre 4 e 8 cenas, cada uma com narração curta (1-3 frases), pensando em um vídeo "
+    "de 30 a 60 segundos no total."
+)
+
+
+def _limpar_json(texto: str) -> str:
+    """Remove blocos ```json ... ``` caso o modelo os inclua por engano."""
+    texto = texto.strip()
+    if texto.startswith("```"):
+        texto = texto.strip("`")
+        if texto.lower().startswith("json"):
+            texto = texto[4:].strip()
+    return texto
+
 
 def analisar_e_criar_pacote_viral(titulo: str, descricao: str, transcricao: str):
     """
     Analisa um vídeo de referência (título, descrição, transcrição) e devolve
     um pacote ESTRUTURADO em JSON, pronto para alimentar o pipeline local de
     renderização (roteiro por cenas + prompt visual + sugestão de efeito sonoro).
+
+    Tenta os modelos em sequência e repete em caso de 503 (demand alta),
+    para não falhar quando um único modelo estiver lotado.
     """
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY não encontrada nas variáveis de ambiente.")
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-
-    prompt_sistema = (
-        "Você é um Diretor de Criação sênior e Estrategista de Conteúdo Viral para "
-        "TikTok, YouTube Shorts e Instagram Reels. Analise o vídeo de referência fornecido "
-        "e crie um pacote completo e original para um novo vídeo, inspirado na estrutura "
-        "de sucesso dele, mas com conteúdo próprio (nunca copie literalmente).\n\n"
-        "Responda ESTRITAMENTE em JSON válido, seguindo exatamente este formato "
-        "(sem markdown, sem texto fora do JSON):\n"
-        "{\n"
-        '  "titulo_otimizado": "string",\n'
-        '  "descricao_otimizada": "string",\n'
-        '  "gancho": "string (os 3 primeiros segundos exatos da narração)",\n'
-        '  "cenas": [\n'
-        "    {\n"
-        '      "numero": 1,\n'
-        '      "narracao": "texto exato para a narração desta cena",\n'
-        '      "prompt_visual": "prompt em inglês, detalhado, para gerar a imagem/vídeo desta cena em uma IA (Midjourney, Runway, Sora, etc.)",\n'
-        '      "efeito_sonoro_sugerido": "palavra-chave curta do efeito (ex: whoosh, ding, suspense, aplausos) ou null se nenhum"\n'
-        "    }\n"
-        "  ]\n"
-        "}\n\n"
-        "Crie entre 4 e 8 cenas, cada uma com narração curta (1-3 frases), pensando em um vídeo "
-        "de 30 a 60 segundos no total."
-    )
 
     contents = (
         f"--- VÍDEO DE REFERÊNCIA ---\n"
@@ -53,39 +82,66 @@ def analisar_e_criar_pacote_viral(titulo: str, descricao: str, transcricao: str)
         f"--- FIM ---"
     )
 
-    try:
-        response = client.models.generate_content(
-            model='gemini-3.8-flash',
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=prompt_sistema,
-                temperature=0.7,
-                response_mime_type="application/json",
-            ),
-        )
+    ultimo_erro = ""
+    ultimo_texto_bruto = ""
 
-        texto_resposta = response.text.strip()
-        # Segurança extra: remove blocos ```json ... ``` caso o modelo os inclua por engano
-        if texto_resposta.startswith("```"):
-            texto_resposta = texto_resposta.strip("`")
-            if texto_resposta.lower().startswith("json"):
-                texto_resposta = texto_resposta[4:].strip()
+    for modelo in MODELOS:
+        for tentativa in range(TENTATIVAS_POR_MODELO):
+            try:
+                response = client.models.generate_content(
+                    model=modelo,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=PROMPT_SISTEMA,
+                        temperature=0.7,
+                        response_mime_type="application/json",
+                    ),
+                )
 
-        try:
-            pacote = json.loads(texto_resposta)
-        except json.JSONDecodeError:
-            # Se por algum motivo o modelo não devolveu JSON válido, não quebra:
-            # devolve o texto bruto num formato que o frontend ainda consegue mostrar.
-            pacote = {
-                "titulo_otimizado": titulo,
-                "descricao_otimizada": "",
-                "gancho": "",
-                "cenas": [],
-                "erro_formatacao": "A IA não devolveu um JSON válido desta vez.",
-                "conteudo_bruto": texto_resposta,
-            }
+                texto_resposta = (response.text or "").strip()
+                if not texto_resposta:
+                    ultimo_erro = f"{modelo}: resposta vazia da IA"
+                    break  # tenta o próximo modelo
 
-        return pacote
+                ultimo_texto_bruto = texto_resposta
+                pacote = json.loads(_limpar_json(texto_resposta))
 
-    except Exception as e:
-        raise Exception(f"Erro ao gerar pacote viral com Gemini: {str(e)}")
+                # Validação mínima da estrutura esperada pelo frontend
+                if not isinstance(pacote, dict) or "cenas" not in pacote:
+                    ultimo_erro = f"{modelo}: JSON sem a lista 'cenas'"
+                    break  # tenta o próximo modelo
+
+                print(f"[Gemini] Pacote gerado com {modelo} (tentativa {tentativa + 1})")
+                return pacote
+
+            except json.JSONDecodeError:
+                # IA devolveu texto fora do formato: não adianta repetir o mesmo modelo
+                ultimo_erro = f"{modelo}: a IA não devolveu JSON válido"
+                break
+
+            except Exception as e:
+                erro = str(e)
+                ultimo_erro = f"{modelo}: {erro}"
+
+                # 503/429 = demanda alta do Google → espera e repete o mesmo modelo
+                if "503" in erro or "429" in erro or "UNAVAILABLE" in erro.upper():
+                    if tentativa < TENTATIVAS_POR_MODELO - 1:
+                        print(f"[Gemini] {modelo} ocupado (503), nova tentativa em {ESPERA_ENTRE_TENTATIVAS}s...")
+                        time.sleep(ESPERA_ENTRE_TENTATIVAS)
+                        continue
+                print(f"[Gemini] {modelo} falhou: {erro[:200]}")
+                break  # erro diferente (ex.: chave inválida) → próximo modelo
+
+    # Todos os modelos falharam: se ao menos temos texto bruto, devolve um pacote
+    # de emergência que o frontend ainda consegue exibir, em vez de um 500 seco.
+    if ultimo_texto_bruto:
+        return {
+            "titulo_otimizado": titulo,
+            "descricao_otimizada": "",
+            "gancho": "",
+            "cenas": [],
+            "erro_formatacao": "A IA não devolveu um JSON válido desta vez. Tente novamente.",
+            "conteudo_bruto": ultimo_texto_bruto,
+        }
+
+    raise Exception(f"Erro ao gerar pacote viral com Gemini: {ultimo_erro}")

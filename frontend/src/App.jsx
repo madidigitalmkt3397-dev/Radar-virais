@@ -1,6 +1,66 @@
 import React, { useState } from 'react';
 import api from './services/api';
 
+// Renderiza o pacote viral (objeto JSON da IA) de forma legível.
+// SEM este componente o React quebra ao receber um objeto como filho.
+function PacoteViral({ pacote }) {
+  if (!pacote) return null;
+
+  // Formato de emergência: a IA não devolveu JSON válido
+  if (pacote.conteudo_bruto) {
+    return (
+      <div style={{ fontSize: '13px' }}>
+        <p style={{ color: '#b00020', fontWeight: 'bold' }}>⚠️ {pacote.erro_formatacao}</p>
+        <pre style={{ whiteSpace: 'pre-wrap', background: '#f6f8fa', padding: '10px', borderRadius: '4px' }}>
+          {pacote.conteudo_bruto}
+        </pre>
+      </div>
+    );
+  }
+
+  const cenas = Array.isArray(pacote.cenas) ? pacote.cenas : [];
+
+  return (
+    <div style={{ fontSize: '13px', color: '#24292f', lineHeight: '1.5' }}>
+      {pacote.titulo_otimizado && (
+        <p style={{ margin: '4px 0' }}><strong>🎬 Título otimizado:</strong> {pacote.titulo_otimizado}</p>
+      )}
+      {pacote.gancho && (
+        <p style={{ margin: '4px 0' }}><strong>🪝 Gancho (0-3s):</strong> {pacote.gancho}</p>
+      )}
+      {pacote.descricao_otimizada && (
+        <p style={{ margin: '4px 0' }}><strong>📝 Descrição otimizada:</strong> {pacote.descricao_otimizada}</p>
+      )}
+
+      {cenas.map((cena, idx) => (
+        <div key={idx} style={{ background: '#fff', borderLeft: '4px solid #0969da', padding: '10px', margin: '8px 0', borderRadius: '4px' }}>
+          <strong>Cena {cena.numero || idx + 1}</strong>
+          <p style={{ margin: '6px 0' }}>{cena.narracao || cena.roteiro}</p>
+          {cena.prompt_visual && (
+            <p style={{ margin: '6px 0', color: '#57606a' }}>
+              <strong>🎨 Prompt visual:</strong> {cena.prompt_visual}
+            </p>
+          )}
+          {cena.efeito_sonoro_sugerido && (
+            <p style={{ margin: '6px 0' }}>
+              <strong>🔊 Efeito sonoro:</strong> {cena.efeito_sonoro_sugerido}
+            </p>
+          )}
+        </div>
+      ))}
+
+      {pacote.cta && <p style={{ margin: '4px 0' }}><strong>📣 CTA:</strong> {pacote.cta}</p>}
+
+      {/* Último recurso: se não bateu nenhum formato conhecido, mostra o JSON */}
+      {cenas.length === 0 && (
+        <pre style={{ whiteSpace: 'pre-wrap', background: '#f6f8fa', padding: '10px', borderRadius: '4px' }}>
+          {JSON.stringify(pacote, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [nicho, setNicho] = useState('Finanças e Investimentos');
   const [palavraChave, setPalavraChave] = useState('');
@@ -80,7 +140,8 @@ function App() {
       setResultadoManual(response.data.script);
     } catch (err) {
       console.error(err);
-      alert('Erro ao gerar análise manual com a IA.');
+      const detalhe = err.response?.data?.detail || err.message;
+      alert(`Erro ao gerar análise manual com a IA.\n\n${detalhe}`);
     } finally {
       setLoadingManual(false);
     }
@@ -96,7 +157,8 @@ function App() {
       return texto;
     } catch (err) {
       console.error(err);
-      const msg = 'Erro ao carregar a transcrição automaticamente.';
+      const detalhe = err.response?.data?.detail || err.message;
+      const msg = `Erro ao carregar a transcrição automaticamente. (${detalhe})`;
       setTranscricoes(prev => ({ ...prev, [videoId]: msg }));
       return msg;
     } finally {
@@ -124,7 +186,8 @@ function App() {
       setResultadosIa(prev => ({ ...prev, [video.id]: response.data.script }));
     } catch (err) {
       console.error(err);
-      alert('Erro ao gerar análise com a IA.');
+      const detalhe = err.response?.data?.detail || err.message;
+      alert(`Erro ao gerar análise com a IA.\n\n${detalhe}`);
     } finally {
       setLoadingIa(prev => ({ ...prev, [video.id]: false }));
     }
@@ -187,8 +250,8 @@ function App() {
         {resultadoManual && (
           <div style={{ marginTop: '15px', background: '#f0f6fc', padding: '15px', borderRadius: '6px', border: '1px solid #0969da' }}>
             <strong style={{ display: 'block', marginBottom: '8px', fontSize: '15px', color: '#0969da' }}>✨ Pacote Viral Gerado (Manual):</strong>
-            <div style={{ margin: 0, fontSize: '13px', color: '#24292f', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
-              {resultadoManual}
+            <div style={{ margin: 0 }}>
+              <PacoteViral pacote={resultadoManual} />
             </div>
           </div>
         )}
@@ -298,8 +361,8 @@ function App() {
                 {resultadosIa[video.id] && (
                   <div style={{ marginTop: '15px', background: '#f0f6fc', padding: '15px', borderRadius: '6px', border: '1px solid #0969da' }}>
                     <strong style={{ display: 'block', marginBottom: '8px', fontSize: '15px', color: '#0969da' }}>✨ Pacote Viral Gerado pela IA:</strong>
-                    <div style={{ margin: 0, fontSize: '13px', color: '#24292f', whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
-                      {resultadosIa[video.id]}
+                    <div style={{ margin: 0 }}>
+                      <PacoteViral pacote={resultadosIa[video.id]} />
                     </div>
                   </div>
                 )}
