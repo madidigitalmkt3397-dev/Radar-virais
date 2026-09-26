@@ -1,0 +1,8 @@
+fastapi==0.100.0
+uvicorn==0.22.0
+google-api-python-client==2.120.0
+youtube-transcript-api==0.6.2
+python-dotenv==1.0.1
+requests==2.31.0
+yt-dlp==2023.12.30
+google-genai
