@@ -6,6 +6,19 @@ import api from './services/api';
 function PacoteViral({ pacote }) {
   if (!pacote) return null;
 
+  // Baixa o pacote como roteiro.json — é ele que o render_video.py lê (Fase 6)
+  const baixarRoteiro = () => {
+    const blob = new Blob([JSON.stringify(pacote, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'roteiro.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   // Formato de emergência: a IA não devolveu JSON válido
   if (pacote.conteudo_bruto) {
     return (
@@ -50,6 +63,15 @@ function PacoteViral({ pacote }) {
       ))}
 
       {pacote.cta && <p style={{ margin: '4px 0' }}><strong>📣 CTA:</strong> {pacote.cta}</p>}
+
+      <div style={{ marginTop: '10px' }}>
+        <button
+          onClick={baixarRoteiro}
+          style={{ background: '#2ea44f', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px' }}
+        >
+          📥 Baixar roteiro (.json)
+        </button>
+      </div>
 
       {/* Último recurso: se não bateu nenhum formato conhecido, mostra o JSON */}
       {cenas.length === 0 && (

@@ -2,3 +2,12 @@
 .env
 __pycache__/
 venv/
+
+# Arquivos de mídia locais (Fase 5/6) — só os READMEs vão pro Git
+cenas/*
+!cenas/README.md
+output/*
+!output/README.md
+banco_efeitos/*
+!banco_efeitos/README.md
+roteiro.json
