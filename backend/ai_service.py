@@ -25,7 +25,15 @@ MODELOS = [
 TENTATIVAS_POR_MODELO = 2
 ESPERA_ENTRE_TENTATIVAS = 2  # segundos
 
-PROMPT_SISTEMA = (
+def montar_prompt_sistema(duracao_segundos: int) -> str:
+    """
+    Monta o prompt de acordo com a duração pedida.
+    Regra de ouro: ~1 cena a cada 8 segundos de vídeo.
+    """
+    cenas_min = max(4, round(duracao_segundos / 12))
+    cenas_max = max(cenas_min + 2, round(duracao_segundos / 7))
+
+    return (
     "Você é um Diretor de Criação sênior e Estrategista de Conteúdo Viral para "
     "TikTok, YouTube Shorts e Instagram Reels. Analise o vídeo de referência fornecido "
     "e crie um pacote completo e original para um novo vídeo, inspirado na estrutura "
@@ -49,8 +57,8 @@ PROMPT_SISTEMA = (
     "    }\n"
     "  ]\n"
     "}\n\n"
-    "Crie entre 4 e 8 cenas, cada uma com narração curta (1-3 frases), pensando em um vídeo "
-    "de 30 a 60 segundos no total.\n\n"
+    f"Crie entre {cenas_min} e {cenas_max} cenas, cada uma com narração curta (1-3 frases), "
+    f"pensando em um vídeo de aproximadamente {duracao_segundos} segundos no total.\n\n"
     "LEMBRETE FINAL: tudo em português do Brasil (pt-BR) — exceto prompt_visual (inglês)."
 )
 
@@ -65,7 +73,9 @@ def _limpar_json(texto: str) -> str:
     return texto
 
 
-def analisar_e_criar_pacote_viral(titulo: str, descricao: str, transcricao: str):
+def analisar_e_criar_pacote_viral(
+    titulo: str, descricao: str, transcricao: str, duracao_segundos: int = 60
+):
     """
     Analisa um vídeo de referência (título, descrição, transcrição) e devolve
     um pacote ESTRUTURADO em JSON, pronto para alimentar o pipeline local de
@@ -97,7 +107,7 @@ def analisar_e_criar_pacote_viral(titulo: str, descricao: str, transcricao: str)
                     model=modelo,
                     contents=contents,
                     config=types.GenerateContentConfig(
-                        system_instruction=PROMPT_SISTEMA,
+                        system_instruction=montar_prompt_sistema(duracao_segundos),
                         temperature=0.7,
                         response_mime_type="application/json",
                     ),

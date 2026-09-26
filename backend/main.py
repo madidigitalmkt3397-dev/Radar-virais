@@ -26,6 +26,7 @@ class AnalysisRequest(BaseModel):
     titulo: str = ""
     descricao: str = ""
     transcricao: str
+    duracao_segundos: int = 60  # 15 a 600 (5 min)
 
 
 @app.get("/")
@@ -56,9 +57,11 @@ def get_transcript(data: dict):
 
 @app.post("/api/analyze-transcript")
 def analyze_transcript(data: AnalysisRequest):
+    # Limita entre 15s e 5min para não gerar roteiros gigantes sem querer
+    duracao = max(15, min(data.duracao_segundos, 600))
     try:
         pacote_gerado = analisar_e_criar_pacote_viral(
-            data.titulo, data.descricao, data.transcricao
+            data.titulo, data.descricao, data.transcricao, duracao
         )
         return {"script": pacote_gerado}
     except Exception as e:

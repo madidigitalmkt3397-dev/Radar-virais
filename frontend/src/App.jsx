@@ -88,6 +88,7 @@ function App() {
   const [palavraChave, setPalavraChave] = useState('');
   const [periodo, setPeriodo] = useState('month');
   const [quantidade, setQuantidade] = useState('5');
+  const [duracao, setDuracao] = useState('60');
   
   // Novos estados para a entrada manual
   const [manualTitulo, setManualTitulo] = useState('');
@@ -155,7 +156,8 @@ function App() {
       const payload = {
         titulo: manualTitulo || 'Vídeo sem título',
         descricao: manualDescricao || '',
-        transcricao: manualTranscricao
+        transcricao: manualTranscricao,
+        duracao_segundos: parseInt(duracao, 10) || 60
       };
 
       const response = await api.post('/api/analyze-transcript', payload);
@@ -201,7 +203,8 @@ function App() {
       const payload = {
         titulo: video.title,
         descricao: video.description || '',
-        transcricao: transcricaoTexto
+        transcricao: transcricaoTexto,
+        duracao_segundos: parseInt(duracao, 10) || 60
       };
 
       const response = await api.post('/api/analyze-transcript', payload);
@@ -262,6 +265,22 @@ function App() {
               style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
               required
             />
+          </div>
+
+          <div>
+            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '13px' }}>Duração do vídeo final:</label>
+            <select
+              value={duracao}
+              onChange={(e) => setDuracao(e.target.value)}
+              style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
+            >
+              <option value="30">30 segundos</option>
+              <option value="60">60 segundos (Short padrão)</option>
+              <option value="90">1 minuto e 30</option>
+              <option value="120">2 minutos</option>
+              <option value="180">3 minutos (máximo do Short)</option>
+              <option value="300">5 minutos (vídeo comum)</option>
+            </select>
           </div>
 
           <button type="submit" style={{ background: '#2ea44f', color: 'white', padding: '10px 15px', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px' }}>
@@ -326,6 +345,18 @@ function App() {
             min="1"
             max="20"
           />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Duração do vídeo:</label>
+          <select value={duracao} onChange={(e) => setDuracao(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}>
+            <option value="30">30 segundos</option>
+            <option value="60">60 segundos (Short padrão)</option>
+            <option value="90">1 minuto e 30</option>
+            <option value="120">2 minutos</option>
+            <option value="180">3 minutos (máximo do Short)</option>
+            <option value="300">5 minutos (vídeo comum)</option>
+          </select>
         </div>
 
         <div style={{ gridColumn: 'span 2' }}>
