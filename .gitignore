@@ -12,5 +12,5 @@ banco_efeitos/*
 !banco_efeitos/README.md
 audio/*
 !audio/README.md
-roteiro.json
+roteiro*.json
 roteiros_prontos/
