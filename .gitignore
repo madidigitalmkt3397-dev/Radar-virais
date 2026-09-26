@@ -10,4 +10,7 @@ output/*
 !output/README.md
 banco_efeitos/*
 !banco_efeitos/README.md
+audio/*
+!audio/README.md
 roteiro.json
+roteiros_prontos/

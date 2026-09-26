@@ -1,3 +1,4 @@
 # Dependências para rodar NO SEU PC (não usa no Render)
 # Instale com:  python -m pip install -r requirements_local.txt
 moviepy>=2.0
+edge-tts>=6.0

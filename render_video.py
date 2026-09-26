@@ -4,15 +4,20 @@
  FASE 6 - Render do video final (MoviePy)
 ===========================================================
  COMO USAR (passo a passo):
-   1. No site, clique em "Baixar roteiro (.json)" e salve
-      o arquivo como `roteiro.json` nesta pasta do projeto
-   2. Coloque os arquivos das cenas na pasta `cenas/`
-      (cena1.mp4, cena2.mp4, cena3.mp4...)
-   3. Rode:  python render_video.py
-   4. Pronto! O video final sai em `output/video_final.mp4`
+   1. `roteiro.json` baixado do site, nesta pasta
+   2. Cenas na pasta `cenas/` (cena1.mp4, cena2.mp4...)
+   3. Narracao:  python gerar_narracao.py   (gera audio/cenaN.mp3)
+   4. Render:    python render_video.py
+      -> saida: `output/video_final.mp4`
 
- Aceita videos (.mp4 .mov .avi .mkv .webm) e imagens
- (.png .jpg .jpeg .webp - cada imagem fica 3 segundos).
+ O que este script faz:
+   - Junta as cenas na ordem dos numeros
+   - Coloca a narracao de cada cena (pasta `audio/`)
+   - Se a narracao for maior que o video, congela o ultimo quadro
+   - Cenas sem audio ficam em silencio (sem quebrar o render)
+
+ Futuro: efeitos sonoros de `banco_efeitos/` (ver roteiro:
+ campo efeito_sonoro_sugerido de cada cena).
 ===========================================================
 """
 
@@ -28,13 +33,15 @@ if hasattr(sys.stdout, "reconfigure"):
 # ---------- Configuracoes ----------
 BASE = Path(__file__).resolve().parent
 PASTA_CENAS = BASE / "cenas"
+PASTA_AUDIO = BASE / "audio"
 PASTA_SAIDA = BASE / "output"
 ARQUIVO_ROTEIRO = BASE / "roteiro.json"
 
 EXTENSOES_VIDEO = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 EXTENSOES_IMAGEM = {".png", ".jpg", ".jpeg", ".webp"}
+EXTENSOES_AUDIO = {".mp3", ".wav"}
 
-TEMPO_IMAGEM_SEGUNDOS = 3.0  # duracao de cada imagem fixa
+TEMPO_IMAGEM_SEGUNDOS = 3.0  # duracao de cada imagem fixa (sem narracao)
 FPS_PADRAO = 30
 NOME_SAIDA = "video_final.mp4"
 
@@ -52,6 +59,18 @@ def descobrir_cenas():
     return encontrados
 
 
+def localizar_narracao(numero: int):
+    """Procura audio/cenaN.mp3 (ou .wav) para a cena N."""
+    if not PASTA_AUDIO.exists():
+        return None
+    for ext in EXTENSOES_AUDIO:
+        for nome in (f"cena{numero}{ext}", f"{numero}{ext}"):
+            caminho = PASTA_AUDIO / nome
+            if caminho.exists():
+                return caminho
+    return None
+
+
 def carregar_roteiro():
     """Le o roteiro.json baixado do site (opcional, mas recomendado)."""
     if not ARQUIVO_ROTEIRO.exists():
@@ -65,6 +84,27 @@ def carregar_roteiro():
         return None
 
 
+def aplicar_narracao(clip, caminho_audio, is_imagem, AudioFileClip, ImageClip, concatenate_videoclips):
+    """
+    Encaixa a narracao na cena:
+    - se o video for menor que a fala, estende (imagem: alonga; video: congela o ultimo quadro)
+    - o audio da narracao SUBSTITUI o som original da cena
+    Devolve (clip_final, objeto_audio_para_fechar).
+    """
+    audio = AudioFileClip(str(caminho_audio))
+    alvo = max(clip.duration, audio.duration)
+
+    if alvo > clip.duration + 0.05:
+        if is_imagem:
+            clip = clip.with_duration(alvo)
+        else:
+            quadro = clip.get_frame(max(clip.duration - 0.06, 0))
+            congelado = ImageClip(quadro).with_duration(alvo - clip.duration)
+            clip = concatenate_videoclips([clip, congelado], method="chain")
+
+    return clip.with_audio(audio), audio
+
+
 def principal():
     print("=" * 58)
     print(" FASE 6 - Render do video final")
@@ -72,7 +112,7 @@ def principal():
 
     # 1. MoviePy instalado?
     try:
-        from moviepy import ImageClip, VideoFileClip, concatenate_videoclips
+        from moviepy import AudioFileClip, ImageClip, VideoFileClip, concatenate_videoclips
     except ImportError:
         sys.exit("ERRO: MoviePy nao instalado. Rode primeiro:\n   python -m pip install moviepy")
 
@@ -98,28 +138,39 @@ def principal():
     else:
         print(f"[OK] Arquivos encontrados: {len(cenas)}")
 
-    # 4. Carrega as cenas
+    # 4. Carrega as cenas + narracao
     clips = []
+    audios = []
+    com_narracao = 0
     try:
         for ordem, arq in cenas:
             ext = arq.suffix.lower()
+            is_imagem = ext in EXTENSOES_IMAGEM
             print(f"  -> Cena {ordem}: {arq.name} ...", end="", flush=True)
-            if ext in EXTENSOES_IMAGEM:
+
+            if is_imagem:
                 clip = ImageClip(str(arq)).with_duration(TEMPO_IMAGEM_SEGUNDOS)
             else:
                 clip = VideoFileClip(str(arq))
+
+            narracao = localizar_narracao(ordem)
+            if narracao:
+                clip, audio = aplicar_narracao(
+                    clip, narracao, is_imagem, AudioFileClip, ImageClip, concatenate_videoclips
+                )
+                audios.append(audio)
+                com_narracao += 1
+                print(f" ok ({clip.duration:.1f}s) [narrado: {narracao.name}]")
+            else:
+                print(f" ok ({clip.duration:.1f}s)")
+
             clips.append(clip)
-            print(f" ok ({clip.duration:.1f}s)")
 
-        # 5. Audio: mantem so se TODAS as cenas tiverem
-        if all(c.audio is not None for c in clips):
-            print("[OK] Audio original das cenas: mantido")
-        else:
-            print("[OK] Nem toda cena tem audio -> audio descartado (a narracao entra na Fase 4)")
-            for c in clips:
-                c.audio = None
+        print(f"[OK] Narração em {com_narracao}/{len(cenas)} cena(s)")
+        if com_narracao < len(cenas):
+            print("     (cenas sem audio ficam em silencio - rode gerar_narracao.py para todas)")
 
-        # 6. Junta tudo
+        # 5. Junta tudo (cenas com audio + cenas sem = CompositeAudioClip, sem erro)
         print("[...] Juntando as cenas...")
         final = concatenate_videoclips(clips, method="compose")
 
@@ -148,6 +199,11 @@ def principal():
         for c in clips:
             try:
                 c.close()
+            except Exception:
+                pass
+        for a in audios:
+            try:
+                a.close()
             except Exception:
                 pass
 
