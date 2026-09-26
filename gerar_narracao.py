@@ -93,6 +93,12 @@ def principal():
     if not isinstance(cenas, list) or not cenas:
         sys.exit("ERRO: o roteiro nao tem a lista 'cenas'.")
 
+    # Mostra QUAL roteiro sera lido (evita usar arquivo antigo sem perceber)
+    titulo = roteiro.get("titulo_otimizado") or "(sem titulo)"
+    data = time.strftime("%d/%m/%Y %H:%M", time.localtime(ARQUIVO_ROTEIRO.stat().st_mtime))
+    print(f'[OK] Roteiro lido: "{titulo}"')
+    print(f"     arquivo salvo em {data} | {len(cenas)} cena(s)")
+
     PASTA_AUDIO.mkdir(exist_ok=True)
     print(f"Voz: {VOZ} | Taxa: {TAXA}\n")
 

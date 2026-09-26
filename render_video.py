@@ -24,6 +24,7 @@
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 # Nunca derruba o script por causa de caractere estranho no console
@@ -44,6 +45,11 @@ EXTENSOES_AUDIO = {".mp3", ".wav"}
 TEMPO_IMAGEM_SEGUNDOS = 3.0  # duracao de cada imagem fixa (sem narracao)
 FPS_PADRAO = 30
 NOME_SAIDA = "video_final.mp4"
+
+# Quando a narracao e MAIOR que o clipe, o que fazer com o excesso:
+#   "lento"    -> video continua em MOVIMENTO, so que mais devagar (recomendado)
+#   "congelar" -> ultimo quadro parado ate a fala acabar (efeito "travado")
+COMO_ESTICAR = "lento"
 
 
 def descobrir_cenas():
@@ -78,29 +84,49 @@ def carregar_roteiro():
         print("    se todas as cenas estao ai (baixe no site: Baixar roteiro)")
         return None
     try:
-        return json.loads(ARQUIVO_ROTEIRO.read_text(encoding="utf-8"))
+        dados = json.loads(ARQUIVO_ROTEIRO.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"[!] roteiro.json ilegivel ({e}) - seguindo sem ele")
         return None
+
+    # Mostra QUAL roteiro foi lido - evita usar um arquivo antigo sem perceber
+    titulo = dados.get("titulo_otimizado") or "(sem titulo)"
+    data = time.strftime("%d/%m/%Y %H:%M", time.localtime(ARQUIVO_ROTEIRO.stat().st_mtime))
+    n_cenas = len(dados.get("cenas")) if isinstance(dados.get("cenas"), list) else 0
+    print(f'[OK] Roteiro lido: "{titulo}"')
+    print(f"     arquivo salvo em {data} | {n_cenas} cena(s)")
+    return dados
 
 
 def aplicar_narracao(clip, caminho_audio, is_imagem, AudioFileClip, ImageClip, concatenate_videoclips):
     """
     Encaixa a narracao na cena:
-    - se o video for menor que a fala, estende (imagem: alonga; video: congela o ultimo quadro)
+    - se o video for menor que a fala, estende:
+        COMO_ESTICAR="lento"    -> video continua em movimento (so que devagar)
+        COMO_ESTICAR="congelar" -> ultimo quadro parado ate a fala acabar
+    - se o video for MUITO maior que a fala, corta no fim da fala (evita buraco mudo)
     - o audio da narracao SUBSTITUI o som original da cena
     Devolve (clip_final, objeto_audio_para_fechar).
     """
     audio = AudioFileClip(str(caminho_audio))
-    alvo = max(clip.duration, audio.duration)
 
-    if alvo > clip.duration + 0.05:
+    # Video menor que a narracao -> estica ate a fala terminar
+    if audio.duration > clip.duration + 0.05:
+        alvo = audio.duration
         if is_imagem:
             clip = clip.with_duration(alvo)
-        else:
+        elif COMO_ESTICAR == "lento":
+            margem = min(0.05, clip.duration * 0.1)
+            fator = (clip.duration - margem) / alvo  # < 1 = joga mais devagar
+            clip = clip.time_transform(lambda t: t * fator).with_duration(alvo)
+        else:  # "congelar"
             quadro = clip.get_frame(max(clip.duration - 0.06, 0))
             congelado = ImageClip(quadro).with_duration(alvo - clip.duration)
             clip = concatenate_videoclips([clip, congelado], method="chain")
+
+    # Video bem maior que a narracao -> corta um pouco apos o fim da fala
+    elif clip.duration > audio.duration + 1.0:
+        clip = clip.with_duration(audio.duration + 0.4)
 
     return clip.with_audio(audio), audio
 
@@ -131,10 +157,21 @@ def principal():
     roteiro = carregar_roteiro()
     if roteiro and isinstance(roteiro.get("cenas"), list):
         esperadas = len(roteiro["cenas"])
-        print(f"[OK] Roteiro: {esperadas} cena(s) esperada(s) | Arquivos: {len(cenas)}")
-        if len(cenas) < esperadas:
-            faltando = [c.get("numero", i + 1) for i, c in enumerate(roteiro["cenas"])]
-            print(f"[!] FALTAM CENAS! Esperadas: {faltando} - veja a pasta `cenas/`")
+        print(f"[OK] Pastas: {esperadas} cena(s) no roteiro | {len(cenas)} arquivo(s) em cenas/")
+        if len(cenas) != esperadas:
+            print(f"[!] ATENCAO: os numeros NAO batem! Verifique se o roteiro.json e o certo.")
+            if len(cenas) < esperadas:
+                faltando = [c.get("numero", i + 1) for i, c in enumerate(roteiro["cenas"])]
+                print(f"    FALTAM cenas - esperadas: {faltando}")
+
+        # Roteiro mais novo que os audios = narracao desatualizada
+        if PASTA_AUDIO.exists():
+            audios = list(PASTA_AUDIO.glob("cena*"))
+            if audios:
+                mais_novo = max(a.stat().st_mtime for a in audios)
+                if ARQUIVO_ROTEIRO.stat().st_mtime > mais_novo + 1:
+                    print("[!] ATENCAO: roteiro.json e MAIS NOVO que os audios de audio/!")
+                    print("    Rode: python gerar_narracao.py  (para atualizar a narracao)")
     else:
         print(f"[OK] Arquivos encontrados: {len(cenas)}")
 
