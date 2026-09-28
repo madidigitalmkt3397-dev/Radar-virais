@@ -12,13 +12,17 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Modelos por ordem de preferência. Se um estiver lotado (erro 503 do Google),
 # o sistema tenta o próximo automaticamente — evita a falha que derrubava a API.
+# NOTA: gemini-2.5-flash foi removido (404 - aposentado para contas novas).
+# Os apelidos "-latest" do final são sempre atualizados pelo Google.
 MODELOS = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
 ]
 
 # Repetições por modelo em caso de 503/429 (sobra de demanda temporária)
