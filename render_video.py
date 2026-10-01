@@ -13,8 +13,10 @@
  O que este script faz:
    - Junta as cenas na ordem dos numeros
    - Coloca a narracao de cada cena (pasta `audio/`)
-   - Se a narracao for maior que o video, congela o ultimo quadro
+   - Se a narracao for maior que o video, estica em slow-motion
+     (ou congela - veja a chave COMO_ESTICAR abaixo)
    - Cenas sem audio ficam em silencio (sem quebrar o render)
+   - Normaliza o volume final: -14 LUFS / -1 dB (padrao YouTube)
 
  Futuro: efeitos sonoros de `banco_efeitos/` (ver roteiro:
  campo efeito_sonoro_sugerido de cada cena).
@@ -23,6 +25,8 @@
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -50,6 +54,10 @@ NOME_SAIDA = "video_final.mp4"
 #   "lento"    -> video continua em MOVIMENTO, so que mais devagar (recomendado)
 #   "congelar" -> ultimo quadro parado ate a fala acabar (efeito "travado")
 COMO_ESTICAR = "lento"
+
+# Fase 7 - Normaliza o volume do video final no padrao das redes sociais
+# (-14 LUFS com teto de -1 dB = YouTube, TikTok e Instagram nunca cortam o som)
+NORMALIZAR = True
 
 
 def descobrir_cenas():
@@ -129,6 +137,57 @@ def aplicar_narracao(clip, caminho_audio, is_imagem, AudioFileClip, ImageClip, c
         clip = clip.with_duration(audio.duration + 0.4)
 
     return clip.with_audio(audio), audio
+
+
+def achar_ffmpeg():
+    """Procura o FFmpeg que ja vem instalado junto com o MoviePy."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+def normalizar_volume(caminho: Path) -> bool:
+    """
+    Fase 7 - Passa final de volume: -14 LUFS com teto em -1 dB.
+    E o padrao do YouTube/TikTok (nem baixo demais, nem estourando).
+    So o audio e ajustado - o video e copiado como esta (rapido).
+    """
+    ffmpeg = achar_ffmpeg()
+    if not ffmpeg:
+        print("[!] FFmpeg nao encontrado - volume fica como estava")
+        return False
+
+    temporario = caminho.with_name("_volume_tmp.mp4")
+    try:
+        saida = subprocess.run(
+            [
+                ffmpeg, "-y", "-i", str(caminho),
+                "-af", "loudnorm=I=-14:TP=-1:LRA=11",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k",
+                str(temporario),
+            ],
+            capture_output=True,
+        )
+        ok = (
+            saida.returncode == 0
+            and temporario.exists()
+            and temporario.stat().st_size > 0
+        )
+        if ok:
+            temporario.replace(caminho)
+            return True
+        linhas = (saida.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        print(f"[!] Normalizacao falhou: {linhas[-1][:110] if linhas else 'erro desconhecido'}")
+        return False
+    finally:
+        if temporario.exists():
+            try:
+                temporario.unlink()
+            except OSError:
+                pass
 
 
 def principal():
@@ -220,6 +279,13 @@ def principal():
             audio_codec="aac",
             fps=FPS_PADRAO,
         )
+
+        if NORMALIZAR:
+            print("[...] Normalizando o volume (-14 LUFS / -1 dB)...")
+            if normalizar_volume(destino):
+                print("[OK] Volume no padrao das redes sociais (-14 LUFS)")
+            else:
+                print("[!] Video mantido com o volume original")
 
         bytes_arquivo = destino.stat().st_size
         tamanho = (
