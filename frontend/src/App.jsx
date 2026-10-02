@@ -274,6 +274,8 @@ function App() {
               onChange={(e) => setDuracao(e.target.value)}
               style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc', boxSizing: 'border-box' }}
             >
+              <option value="15">15 segundos (cortes rápidos)</option>
+              <option value="20">20 segundos (cortes rápidos)</option>
               <option value="30">30 segundos</option>
               <option value="60">60 segundos (Short padrão)</option>
               <option value="90">1 minuto e 30</option>
@@ -350,7 +352,9 @@ function App() {
         <div>
           <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>Duração do vídeo:</label>
           <select value={duracao} onChange={(e) => setDuracao(e.target.value)} style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}>
-            <option value="30">30 segundos</option>
+            <option value="15">15 segundos (cortes rápidos)</option>
+              <option value="20">20 segundos (cortes rápidos)</option>
+              <option value="30">30 segundos</option>
             <option value="60">60 segundos (Short padrão)</option>
             <option value="90">1 minuto e 30</option>
             <option value="120">2 minutos</option>

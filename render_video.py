@@ -21,9 +21,9 @@
    - Fase 8: efeitos sonoros - so toca o que estiver em banco_efeitos/
      (padrao); com SFX_SO_ARQUIVOS = False o render sintetiza
      whoosh/suspense/heartbeat/ding/impacto na hora (tudo gratis)
-    - Fase 10: Cut Engine - cortes internos na cadencia da narração
-      (chave PERFIL_CORTES: "normal" 2-4s | "rapida" 1-2,5s |
-      "muito_rapida" 0,7-1,8s - padrao: rapida)
+    - Fase 10: Cut Engine - cortes internos em ritmo ALTERNADO
+      (chave PERFIL_CORTES: "normal" 5-7-7-5s | "rapida" 3-5-5-3s |
+      "muito_rapida" 0,9-1,8-1,8-0,9s - padrao: rapida)
 
  Para ligar/desligar: chaves SFX_* no topo do script.
  Efeitos com arquivo (risadas, aplausos...): baixe gratis, salve em
@@ -100,22 +100,29 @@ INVERTER_CORES = False    # inverte as cores (efeito psicodelico)
 
 # ---------- FASE 10 - Cut Engine (cortes no ritmo da narração) ----------
 CUT_ENGINE = True           # liga/desliga o motor de cortes internos
-PERFIL_CORTES = "rapida"    # "normal" (2-4s) | "rapida" (1-2,5s) |
-                            # "muito_rapida" (0,7-1,8s)
+PERFIL_CORTES = "rapida"    # ritmo alternado de duracao de cada plano:
+                            # "normal" (5-7-7-5s) | "rapida" (3-5-5-3s) |
+                            # "muito_rapida" (0,9-1,8-1,8-0,9s)
 CUT_SFX = "auto"            # whoosh nos cortes internos:
                             # "auto" = so no perfil muito_rapida |
                             # True = em todos | False = nunca
 CUT_SFX_VOLUME = 0.3        # volume do whoosh dos cortes internos
 CUT_MARGEM_CENA = 0.45      # nao corta nos X s iniciais/finais da cena
 
-# duracao alvo de cada plano + forca visual (zoom/pan) por perfil
-# "salto" = troca minima de escala no limite de cada corte (o corte visual)
+# ritmo de cada perfil: "alvos" = duracao que CADA plano deve ter, alternando
+#   (ex.: [3, 5, 5, 3] = 3s, 5s, 5s, 3s, 3s, 5s, 5s, 3s...) | "tol" = folga
+#   para o corte encaixar numa pausa/impacto pertinho do alvo
+# "min"/"max" = limites duros | "salto" = troca minima de escala no limite
+#   de cada corte (o corte visual) | "forca"/"pan" = forca do zoom/enquadramento
 PERFIS_CORTES = {
-    "normal":       {"min": 2.0, "max": 4.0, "forca": 0.05,
+    "normal":       {"alvos": [5, 7, 7, 5], "tol": 1.2,
+                     "min": 2.5, "max": 9.0, "forca": 0.05,
                      "pan": 0.04, "impacto": 0.06, "salto": 0.045},
-    "rapida":       {"min": 1.0, "max": 2.5, "forca": 0.09,
+    "rapida":       {"alvos": [3, 5, 5, 3], "tol": 1.2,
+                     "min": 2.0, "max": 7.0, "forca": 0.09,
                      "pan": 0.07, "impacto": 0.12, "salto": 0.06},
-    "muito_rapida": {"min": 0.7, "max": 1.8, "forca": 0.13,
+    "muito_rapida": {"alvos": [0.9, 1.8, 1.8, 0.9], "tol": 0.5,
+                     "min": 0.7, "max": 2.5, "forca": 0.13,
                      "pan": 0.10, "impacto": 0.16, "salto": 0.075},
 }
 
@@ -1079,7 +1086,8 @@ def calcular_cortes(dur, energia, texto, perfil, clip=None):
     """
     Cut Engine: devolve os cortes da cena (tempo local, em segundos).
     Cada item = {"t": segundo, "impacto": True/False}.
-    Respeita a janela min..max do perfil e a margem da cena.
+    Sigue o ritmo alternado (alvos) do perfil, os limites min/max
+    do perfil e a margem da cena.
     """
     import numpy as np
     cfg = PERFIS_CORTES.get(perfil) or PERFIS_CORTES["rapida"]
@@ -1123,19 +1131,24 @@ def calcular_cortes(dur, energia, texto, perfil, clip=None):
             limpos.append(c)
     candidatos = sorted(limpos, key=lambda c: c["t"])
 
-    # 5) janela do perfil: anda do inicio ao fim cortando dentro de min..max
+    # 5) ritmo alternado do perfil (ex.: alvos 3, 5, 5, 3 = 3s, 5s, 5s, 3s,
+    #    3s, 5s...) - o corte procura ficar perto do alvo da vez, mas entra
+    #    na pausa/impacto pertinho dele (folga = tol)
+    alvos = cfg.get("alvos") or [(cfg["min"] + cfg["max"]) / 2.0]
+    tol = cfg.get("tol", max(0.4, (cfg["max"] - cfg["min"]) / 2.0))
     cortes = []
     t = margem
+    k = 0
     while True:
-        lo = t + cfg["min"]
-        hi = min(t + cfg["max"], dur - cfg["min"])
+        mira = t + alvos[k % len(alvos)]
+        lo = max(t + cfg["min"], mira - tol)
+        hi = min(mira + tol, t + cfg["max"], dur - cfg["min"])
         if lo > hi:
             break
         na_janela = [c for c in candidatos if lo - 1e-6 <= c["t"] <= hi + 1e-6]
         if na_janela:
-            meio = t + (cfg["min"] + cfg["max"]) / 2.0
             melhor = max(na_janela,
-                         key=lambda c: (c["peso"], -abs(c["t"] - meio)))
+                         key=lambda c: (c["peso"], -abs(c["t"] - mira)))
             alvo, impacto = melhor["t"], bool(melhor["impacto"])
         elif energia is not None:
             # nenhum sinal: corta no ponto mais calmo da janela
@@ -1149,6 +1162,7 @@ def calcular_cortes(dur, energia, texto, perfil, clip=None):
         alvo = min(max(alvo, lo), hi)
         cortes.append({"t": round(float(alvo), 3), "impacto": impacto})
         t = alvo
+        k += 1
     return cortes
 
 
@@ -1364,12 +1378,13 @@ def principal():
                 print("[cut] Cut Engine parado: ZOOM_DINAMICO = False")
             else:
                 cfg_p = PERFIS_CORTES[PERFIL_CORTES]
+                ritmo = "-".join(f"{a:g}" for a in cfg_p.get("alvos", []))
                 total_cortes = sum(n for _, n in resumo_cortes)
                 detalhe = " | ".join(
                     f"cena {n}: {k}" for n, k in resumo_cortes
                 )
                 print(f"[cut] Perfil {PERFIL_CORTES} "
-                      f"({cfg_p['min']:g}-{cfg_p['max']:g}s por plano): "
+                      f"(ritmo {ritmo}s por plano): "
                       f"{detalhe} -> {total_cortes} corte(s) interno(s)")
                 instantes = sorted(
                     info["inicio"] + t

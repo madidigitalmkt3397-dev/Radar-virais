@@ -36,6 +36,12 @@ def montar_prompt_sistema(duracao_segundos: int) -> str:
     """
     cenas_min = max(4, round(duracao_segundos / 12))
     cenas_max = max(cenas_min + 2, round(duracao_segundos / 7))
+    # orcamento de palavras por cena: fala em pt-BR rende ~3,2 palavras por
+    # segundo - assim 15s/20s nao estouram a duracao pedida (o roteiro curto
+    # mantem as MESMAS cenas de um video de 30s, so que mais enxuto)
+    palavras_cena = max(
+        6, round(duracao_segundos * 3.2 / ((cenas_min + cenas_max) / 2.0))
+    )
 
     return (
     "Você é um Diretor de Criação sênior e Estrategista de Conteúdo Viral para "
@@ -61,8 +67,10 @@ def montar_prompt_sistema(duracao_segundos: int) -> str:
     "    }\n"
     "  ]\n"
     "}\n\n"
-    f"Crie entre {cenas_min} e {cenas_max} cenas, cada uma com narração curta (1-3 frases), "
-    f"pensando em um vídeo de aproximadamente {duracao_segundos} segundos no total.\n\n"
+    f"Crie entre {cenas_min} e {cenas_max} cenas, cada uma com narração de no máximo "
+    f"{palavras_cena} palavras (frases curtas e diretas), "
+    f"pensando em um vídeo de aproximadamente {duracao_segundos} segundos no total. "
+    f"A soma de todas as narrações deve dar próximo de {duracao_segundos} segundos de fala falada.\n\n"
     "LEMBRETE FINAL: tudo em português do Brasil (pt-BR) — exceto prompt_visual (inglês)."
 )
 
