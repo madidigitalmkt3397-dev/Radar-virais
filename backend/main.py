@@ -1,7 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from backend.youtube_service import search_viral_videos, get_video_transcript
+from backend.youtube_service import (
+    search_viral_videos,
+    get_video_transcript,
+    diagnosticar_transcript,
+)
 from backend.ai_service import analisar_e_criar_pacote_viral
 
 app = FastAPI(title="Radar de Virais API")
@@ -51,6 +55,17 @@ def get_transcript(data: dict):
     try:
         transcript = get_video_transcript(video_id)
         return {"transcript": transcript}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/diag-transcript")
+def diag_transcript(video_id: str = "dQw4w9WgXcQ"):
+    """Diagnostico: testa TODAS as fontes de transcricao a partir deste
+    servidor e devolve status/tempo de cada uma. Serve para descobrir o que
+    funciona de la (Render) quando a busca automatica falha."""
+    try:
+        return diagnosticar_transcript(video_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
