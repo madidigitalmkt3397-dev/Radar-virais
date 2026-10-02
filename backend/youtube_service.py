@@ -38,8 +38,13 @@ _NAVEGADOR_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 _YT_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"  # chave publica do YouTube
-# primeiro o host da API do Google (costuma bloquear menos IP de nuvem)
-INNERTUBE_HOSTS = ("https://youtubei.googleapis.com", "https://www.youtube.com")
+# hosts em ordem de preferencia: a API do Google costuma bloquear menos
+# IP de nuvem do que o youtube.com
+INNERTUBE_HOSTS = (
+    "https://youtubei.googleapis.com",
+    "https://www.googleapis.com",
+    "https://www.youtube.com",
+)
 
 # Variantes de cliente (versoes atuais conforme o yt-dlp), na ordem em que a
 # cadeia tenta. O IP de nuvem recebe LOGIN_REQUIRED em versoes antigas, por
