@@ -192,9 +192,18 @@ function App() {
 
   const handleGerarPacoteIa = async (video) => {
     const transcricaoTexto = await buscarTranscricao(video.id);
-    
-    if (!transcricaoTexto || transcricaoTexto.includes('Erro')) {
-      alert('O YouTube bloqueou a extração automática. Use a seção de "Inserção Manual" acima para colar a transcrição!');
+    const falhou = !transcricaoTexto
+      || transcricaoTexto.startsWith('Erro ao carregar a transcrição')
+      || transcricaoTexto.includes('Transcrição indisponível');
+
+    if (falhou) {
+      alert(
+        'Não consegui puxar a transcrição automática deste vídeo.\n\n' +
+        `Motivo: ${transcricaoTexto || '(sem retorno)'}\n\n` +
+        'Você pode gerar o pacote mesmo assim: abra o vídeo no YouTube, ' +
+        'clique em "..." → "Mostrar transcrição", copie o texto e cole ' +
+        'na seção "Inserção Manual de Vídeo" acima.'
+      );
       return;
     }
 
