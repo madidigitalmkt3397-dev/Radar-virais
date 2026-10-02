@@ -40,9 +40,31 @@ _NAVEGADOR_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 _YT_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"  # chave publica do YouTube
 # primeiro o host da API do Google (costuma bloquear menos IP de nuvem)
 INNERTUBE_HOSTS = ("https://youtubei.googleapis.com", "https://www.youtube.com")
-# so o cliente ANDROID entrega legenda sem login
-# (WEB/MWEB/TVHTML5 -> UNPLAYABLE, IOS -> HTTP 400, ANDROID_VR -> LOGIN_REQUIRED)
-INNERTUBE_CLIENTES = (("ANDROID", "20.10.38", "3"),)
+
+# Variantes de cliente (versoes atuais conforme o yt-dlp), na ordem em que a
+# cadeia tenta. O IP de nuvem recebe LOGIN_REQUIRED em versoes antigas, por
+# isso a lista traz android e ios atualizados com o User-Agent proprio de cada
+# app. (WEB/MWEB/TVHTML5 -> UNPLAYABLE; ANDROID_VR/VISIONOS -> LOGIN_REQUIRED.)
+INNERTUBE_VARIANTES = (
+    ("android_21", {
+        "clientName": "ANDROID", "clientVersion": "21.26.364",
+        "androidSdkVersion": 30, "osName": "Android", "osVersion": "11",
+        "hl": "pt", "gl": "BR",
+    }, "3",
+        "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip"),
+    ("ios_21", {
+        "clientName": "IOS", "clientVersion": "21.26.4",
+        "deviceMake": "Apple", "deviceModel": "iPhone16,2",
+        "osName": "iPhone", "osVersion": "18.3.2.22D82",
+        "hl": "pt", "gl": "BR",
+    }, "5",
+        "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 "
+        "like Mac OS X;)"),
+    ("android_20", {
+        "clientName": "ANDROID", "clientVersion": "20.10.38",
+        "androidSdkVersion": 30, "hl": "pt", "gl": "BR",
+    }, "3", _NAVEGADOR_UA),
+)
 ORCAMENTO_TRANSCRICAO = 15.0   # segundos maximos de toda a cadeia
 
 DICA_MANUAL = (
@@ -195,44 +217,61 @@ def _extrair_texto_legenda(corpo: str) -> str:
 
 
 def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = None,
-                          orcamento: bool = True):
-    """Transcricao pela API interna do YouTube (Innertube, cliente ANDROID).
+                          orcamento: bool = True, todas: bool = False):
+    """Transcricao pela API interna do YouTube (Innertube).
 
-    Devolve o texto; None quando o video realmente nao tem legenda;
-    levanta Exception quando a fonte falha (a cadeia tenta a proxima).
+    Tenta as variantes de cliente de INNERTUBE_VARIANTES (android e ios
+    atualizados, cada um com o User-Agent do proprio app) nos hosts de
+    INNERTUBE_HOSTS. Devolve o texto; None quando o video realmente nao tem
+    legenda; levanta Exception quando nenhuma variante funciona.
     Cada tentativa entra em `relatorio` (fonte/status/ms/chars) se informado.
-    `orcamento=False` testa todos os hosts mesmo passado o tempo limite
-    (usado pelo diagnostico, que quer saber o que funciona no servidor).
+
+    `orcamento=False` testa tudo mesmo passado o tempo limite e `todas=True`
+    continua apos o primeiro sucesso - usado pelo diagnostico, que quer saber
+    o que funciona de verdade no servidor.
     """
-    ultimo_erro = "nenhum host testado"
+    ultimo_erro = "nenhuma variante testada"
+    visitor = None        # X-Goog-Visitor-Id reaproveitado entre tentativas
+    texto_ok = None       # primeira legenda obtida
+    sem_legenda = False   # alguma variante viva respondeu sem trilhas
     t_ini = time.monotonic()
-    for host in INNERTUBE_HOSTS:
-        # no modo cadeia, para de testar hosts quando o orcamento acabou
+
+    for rot, cli, numero, ua in INNERTUBE_VARIANTES:
+        # no modo cadeia, para quando o orcamento acabou
         if orcamento and time.monotonic() - t_ini > ORCAMENTO_TRANSCRICAO:
             ultimo_erro = "orcamento de tempo esgotado (innertube)"
+            if relatorio is not None:
+                relatorio.append({"fonte": "innertube",
+                                  "status": "pulado (orcamento)",
+                                  "ms": 0, "chars": 0})
             break
-        origem = f"innertube:{host.split('//')[1]}"
-        for nome, ver, numero in INNERTUBE_CLIENTES:
+        for host in INNERTUBE_HOSTS:
+            origem = f"innertube:{rot}@{host.split('//')[1]}"
             t0 = time.monotonic()
             try:
-                cliente = {"clientName": nome, "clientVersion": ver,
-                           "hl": "pt", "gl": "BR"}
-                if nome.startswith("ANDROID"):
-                    cliente["androidSdkVersion"] = 30
+                cabecais = {
+                    "X-Youtube-Client-Name": numero,
+                    "X-Youtube-Client-Version": cli["clientVersion"],
+                    "User-Agent": ua,
+                }
+                if visitor:
+                    cabecais["X-Goog-Visitor-Id"] = visitor
                 pr = _http_post_json(
                     f"{host}/youtubei/v1/player"
                     f"?key={_YT_KEY}&prettyPrint=false",
                     {
-                        "context": {"client": cliente},
+                        "context": {"client": cli},
                         "videoId": video_id,
                         "contentCheckOk": True,
                         "racyCheckOk": True,
                     },
-                    {"X-Youtube-Client-Name": numero,
-                     "X-Youtube-Client-Version": ver},
+                    cabecais,
                     timeout=timeout,
                 )
                 ms = int((time.monotonic() - t0) * 1000)
+                vd = (pr.get("responseContext") or {}).get("visitorData")
+                if vd:
+                    visitor = vd
                 status = pr.get("playabilityStatus", {}).get("status")
                 if status not in (None, "OK"):
                     ultimo_erro = f"{origem}: status {status}"
@@ -245,31 +284,46 @@ def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = Non
                              .get("captionTracks", []))
                 if not trilhas:
                     # respondeu com status OK e o video nao tem legenda
+                    sem_legenda = True
                     if relatorio is not None:
                         relatorio.append({"fonte": origem,
                                           "status": "ok, sem legenda",
                                           "ms": ms, "chars": 0})
-                    return None
-                # prefere pt-BR > pt > en > a primeira disponivel
-                alvo = None
-                for cod in IDIOMAS_PREF:
-                    alvo = next((t for t in trilhas
-                                 if (t.get("languageCode") or "").lower()
-                                 .startswith(cod.lower())), None)
-                    if alvo:
-                        break
-                alvo = alvo or trilhas[0]
-                legenda = _http_get(alvo["baseUrl"] + "&fmt=json3",
-                                    timeout=timeout)
-                texto = _extrair_texto_legenda(legenda)
-                ms = int((time.monotonic() - t0) * 1000)
-                if relatorio is not None:
-                    relatorio.append({"fonte": origem,
-                                      "status": "ok" if texto else "legenda vazia",
-                                      "ms": ms, "chars": len(texto)})
-                if texto:
-                    return texto
-                ultimo_erro = f"{origem}: legenda vazia"
+                    if not todas:
+                        return None
+                    continue
+                if texto_ok is None:
+                    # prefere pt-BR > pt > en > a primeira disponivel
+                    alvo = None
+                    for cod in IDIOMAS_PREF:
+                        alvo = next((t for t in trilhas
+                                     if (t.get("languageCode") or "").lower()
+                                     .startswith(cod.lower())), None)
+                        if alvo:
+                            break
+                    alvo = alvo or trilhas[0]
+                    legenda = _http_get(alvo["baseUrl"] + "&fmt=json3",
+                                        timeout=timeout)
+                    texto = _extrair_texto_legenda(legenda)
+                    ms = int((time.monotonic() - t0) * 1000)
+                    if texto:
+                        texto_ok = texto
+                    if relatorio is not None:
+                        relatorio.append({
+                            "fonte": origem,
+                            "status": "ok" if texto else "legenda vazia",
+                            "ms": ms, "chars": len(texto)})
+                    ultimo_erro = (f"{origem}: legenda vazia" if not texto
+                                   else ultimo_erro)
+                else:
+                    # ja temos a legenda: so registra que esta variante tb funciona
+                    if relatorio is not None:
+                        relatorio.append({
+                            "fonte": origem,
+                            "status": f"ok ({len(trilhas)} trilhas)",
+                            "ms": ms, "chars": 0})
+                if texto_ok and not todas:
+                    return texto_ok
             except Exception as e:
                 ms = int((time.monotonic() - t0) * 1000)
                 motivo = f"{type(e).__name__}: {str(e)[:70]}"
@@ -277,6 +331,11 @@ def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = Non
                     relatorio.append({"fonte": origem, "status": motivo,
                                       "ms": ms, "chars": 0})
                 ultimo_erro = f"{origem}: {motivo}"
+
+    if texto_ok:
+        return texto_ok
+    if sem_legenda:
+        return None
     raise RuntimeError(ultimo_erro)
 
 
@@ -306,7 +365,7 @@ def get_video_transcript(video_id: str) -> str:
     """Busca a transcricao do video (pt-BR > pt > en).
 
     Cadeia de fontes (todas gratuitas, sem chave propria):
-    1) API interna Innertube (cliente ANDROID) - nao cai no captcha;
+    1) API interna Innertube (variantes android/ios atuais) - nao cai no captcha;
     2) instancias Piped - 1 rodada, rede de seguranca.
     Toda a cadeia tem orcamento de ORCAMENTO_TRANSCRICAO segundos; se tudo
     falhar, levanta ValueError com o motivo (fonte + status + ms) + dica
@@ -380,7 +439,7 @@ def diagnosticar_transcript(video_id: str) -> dict:
     t_ini = time.monotonic()
     try:
         innertube_texto = _transcript_innertube(video_id, relatorio=relatorio,
-                                                orcamento=False)
+                                                orcamento=False, todas=True)
     except Exception as e:
         innertube_erro = str(e)[:200]
 
