@@ -73,6 +73,10 @@ INNERTUBE_VARIANTES = (
     }, "3", _NAVEGADOR_UA),
 )
 ORCAMENTO_TRANSCRICAO = 15.0   # segundos maximos de toda a cadeia
+# O youtubei bloqueia IP de nuvem em escalada (LOGIN_REQUIRED -> 403 ->
+# timeout) e CADA chamada alimenta o bloqueio. Parar apos N falhas de
+# transporte seguidas evita martelar o endpoint durante uma restricao.
+MAX_FALHAS_REDE = 2
 
 DICA_MANUAL = (
     'Use a secao "Insercao Manual" do site: abra o video no YouTube, '
@@ -241,27 +245,33 @@ def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = Non
     visitor = None        # X-Goog-Visitor-Id reaproveitado entre tentativas
     texto_ok = None       # primeira legenda obtida
     sem_legenda = False   # alguma variante viva respondeu sem trilhas
-    cortado = False       # orcamento ja estourado (avisa so 1x no relatorio)
+    parar = False         # parada ja decidida (relatorio recebe 1 aviso so)
+    falhas_rede = 0       # excecoes de transporte seguidas (403/timeout/dns)
     t_ini = time.monotonic()
 
     for rot, cli, numero, ua in INNERTUBE_VARIANTES:
+        if parar:
+            break
         # no modo cadeia, para quando o orcamento acabou
         if orcamento and time.monotonic() - t_ini > ORCAMENTO_TRANSCRICAO:
             ultimo_erro = "orcamento de tempo esgotado (innertube)"
-            if not cortado and relatorio is not None:
+            if relatorio is not None:
                 relatorio.append({"fonte": "innertube",
                                   "status": "pulado (orcamento)",
                                   "ms": 0, "chars": 0})
+            parar = True
             break
         for host in INNERTUBE_HOSTS:
+            if parar:
+                break
             # corte tambem no meio da variante (hosts podem pendurar 6s+ cada)
             if orcamento and time.monotonic() - t_ini > ORCAMENTO_TRANSCRICAO:
                 ultimo_erro = "orcamento de tempo esgotado (innertube)"
-                if not cortado and relatorio is not None:
+                if relatorio is not None:
                     relatorio.append({"fonte": "innertube",
                                       "status": "pulado (orcamento)",
                                       "ms": 0, "chars": 0})
-                cortado = True
+                parar = True
                 break
             origem = f"innertube:{rot}@{host.split('//')[1]}"
             t0 = time.monotonic()
@@ -285,6 +295,7 @@ def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = Non
                     timeout=timeout,
                 )
                 ms = int((time.monotonic() - t0) * 1000)
+                falhas_rede = 0   # a camada de aplicacao respondeu
                 vd = (pr.get("responseContext") or {}).get("visitorData")
                 if vd:
                     visitor = vd
@@ -346,7 +357,20 @@ def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = Non
                 if relatorio is not None:
                     relatorio.append({"fonte": origem, "status": motivo,
                                       "ms": ms, "chars": 0})
+                falhas_rede += 1
                 ultimo_erro = f"{origem}: {motivo}"
+                # so no modo cadeia: N falhas de transporte seguidas param a
+                # matriz inteira para nao martelar o endpoint (cada chamada
+                # durante um bloqueio faz o YouTube endurecer o bloqueio)
+                if orcamento and falhas_rede >= MAX_FALHAS_REDE:
+                    parar = True
+                    if relatorio is not None:
+                        relatorio.append({
+                            "fonte": "innertube",
+                            "status": (f"interrompido apos {falhas_rede} "
+                                       "falhas de rede seguidas"),
+                            "ms": 0, "chars": 0})
+                    break
 
     if texto_ok:
         return texto_ok
