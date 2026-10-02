@@ -415,22 +415,92 @@ def _com_pico(som, pico):
     return som * (pico / maximo)
 
 
-def _synth_whoosh(dur=0.55):
-    """Tsswsh - ruido com corte que sobe e desce (som de transicao)."""
+def _whoosh_filtrado(ruido, f):
+    """
+    Uma camada do whoosh: ruido -> banda ressonante que varre (SVF)
+    + corpo grave. Sem ruido branco "solto" = nao vira chiado.
+    """
     import numpy as np
-    rng = np.random.default_rng(101)
+    n = len(ruido)
+    # 2 estagios em cascata: bordas mais fechadas (a banda de verdade
+    # varre; sobra pouco ruido solto = sem chiado)
+    entrada = ruido
+    for _ in range(2):
+        low1 = b1 = low2 = b2 = 0.0
+        etapa = np.empty(n, "float64")
+        for i in range(n):
+            fi = f[i]
+            # corpo da banda (resonancia moderada)
+            high1 = entrada[i] - low1 - 0.62 * b1
+            b1 += fi * high1
+            low1 += fi * b1
+            # foco tonal (resonancia alta = "shh" com tom, nao "tss")
+            high2 = entrada[i] - low2 - 0.30 * b2
+            b2 += fi * high2
+            low2 += fi * b2
+            etapa[i] = b1 * 0.85 + b2 * 0.50
+        entrada = etapa
+    banda = etapa
+    # corpo grave acompanha a varredura (o "peso" do whoosh)
+    f_corpo = 1.0 - np.exp(-2.0 * np.pi * (f / 6.0) / FS_SFX)
+    y = 0.0
+    corpo = np.empty(n, "float64")
+    for i in range(n):
+        y += f_corpo[i] * (ruido[i] - y)
+        corpo[i] = y
+    return banda * 2.4 + corpo * 1.15
+
+
+def _synth_whoosh(dur=0.55):
+    """
+    Whoosh de transicao profissional (3 camadas, zero chiado):
+      1. banda ressonante que SOBE e DESCE (o corpo do whoosh)
+      2. corpo grave acompanhando a varredura (peso)
+      3. tom doppler sutil + corte agudo acima de 7.5kHz
+    Envoltoria assimetrica: pico antes do corte, cai devagar.
+    """
+    import numpy as np
     n = int(dur * FS_SFX)
     t = np.arange(n) / FS_SFX
-    ruido = rng.standard_normal(n)
-    fc = 250.0 + 3000.0 * np.sin(np.pi * t / dur) ** 1.3
-    alfa = 1.0 - np.exp(-2.0 * np.pi * fc / FS_SFX)
-    saida = np.empty(n, "float32")
-    y = 0.0
-    for i in range(n):                 # filtro 1 polo com corte variavel
-        y += alfa[i] * (ruido[i] - y)
-        saida[i] = y
-    saida *= np.sin(np.pi * t / dur) ** 2   # sobe e cai sem clique
-    return _estereo(_com_pico(saida, 0.85))
+    u = t / dur
+
+    # varredura: banda sobe ate o meio do whoosh e desce
+    fc = 170.0 + 2000.0 * np.sin(np.pi * u ** 0.75) ** 1.4
+    f = 2.0 * np.sin(np.pi * np.clip(fc, 20.0, FS_SFX * 0.45) / FS_SFX)
+
+    # estereo real (sementes diferentes = largura profissional)
+    canais = [
+        _whoosh_filtrado(np.random.default_rng(s).standard_normal(n), f * d)
+        for s, d in ((101, 1.0), (202, 1.07))
+    ]
+    estereo = np.stack(canais, axis=1)
+
+    # tom doppler sutil (foco tonal - whoosh de verdade nao e so ruido)
+    f_tom = 300.0 + 750.0 * np.sin(np.pi * u ** 1.1)
+    estereo += (np.sin(2 * np.pi * np.cumsum(f_tom) / FS_SFX) * 0.14)[:, None]
+
+    # corta o agudo que vira "chiado" (ruido branco agudo = amador)
+    espectro = np.fft.rfft(estereo, axis=0)
+    espectro[np.fft.rfftfreq(n, 1.0 / FS_SFX) > 7500.0] *= 0.15
+    estereo = np.fft.irfft(espectro, n, axis=0)
+
+    # envoltoria: sobe rapido (pico em 35% = antes do corte)...
+    ta = 0.35 * dur
+    env = np.where(
+        t < ta,
+        0.5 - 0.5 * np.cos(np.pi * np.clip(t / ta, 0, 1) ** 1.3),
+        np.exp(-((t - ta) / max(dur - ta, 1e-6)) * 2.6),
+    )
+    env *= np.clip((dur - t) / 0.08, 0.0, 1.0)   # termina em zero (sem estalo)
+    estereo *= env[:, None]
+
+    # saturacao suave (densidade + volume sem estourar o pico)
+    topo = float(np.abs(estereo).max())
+    if topo > 1e-9:
+        estereo = estereo / topo
+        estereo = np.tanh(estereo * 2.0) / np.tanh(2.0)
+
+    return _com_pico(estereo.astype("float32"), 0.85)
 
 
 def _synth_ding():
