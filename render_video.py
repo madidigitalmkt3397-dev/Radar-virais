@@ -62,12 +62,12 @@ NORMALIZAR = True
 
 # ---------- FASE 9 - Imagem viva (edite para ligar/desligar) ----------
 ZOOM_DINAMICO = True      # Ken Burns: zoom sutil em cada cena
-ESCALA_ZOOM = 1.07        # ate onde o zoom vai (1.07 = +7%; nunca < 1.0)
+ESCALA_ZOOM = 1.12        # ate onde o zoom vai (1.12 = +12%; nunca < 1.0)
 CORRECAO_COR = True        # contraste + brilho + saturacao
-SATURACAO = 1.15          # 1.0 = sem mudanca | 1.15 = +15% de cor
-CONTRASTE = 1.08          # 1.0 = sem mudanca
+SATURACAO = 1.25          # 1.0 = sem mudanca | 1.25 = +25% de cor
+CONTRASTE = 1.12          # 1.0 = sem mudanca
 BRILHO = 1.02             # 1.0 = sem mudanca
-NITIDEZ = 0.6             # 0 = desligado | 0.6 = recomendado
+NITIDEZ = 0.9             # 0 = desligado | 0.9 = recomendado
 FADE_ENTRADA = 0.4        # segundos surgindo do preto (0 = desligado)
 FADE_SAIDA = 0.5          # segundos terminando no preto
 
