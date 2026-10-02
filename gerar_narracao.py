@@ -24,6 +24,7 @@
 
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -308,6 +309,15 @@ def principal():
     PASTA_AUDIO.mkdir(exist_ok=True)
     print(f"Voz: {VOZ} | Taxa: {TAXA}\n")
 
+    # Numeros de cena do roteiro ATUAL (para limpar sobras no final)
+    numeros_roteiro = set()
+    for i, cena in enumerate(cenas):
+        if isinstance(cena, dict):
+            try:
+                numeros_roteiro.add(int(cena.get("numero", i + 1)))
+            except (TypeError, ValueError):
+                numeros_roteiro.add(i + 1)
+
     ok = 0
     puladas = 0
     for i, cena in enumerate(cenas):
@@ -333,8 +343,23 @@ def principal():
         else:
             print(" falhou")
 
+    # Apaga narracoes de VIDEOS ANTIGOS que nao pertencem ao roteiro atual
+    # (evita o render usar uma narração errada sem ninguém perceber)
+    apagados = 0
+    if PASTA_AUDIO.exists():
+        for arq in PASTA_AUDIO.iterdir():
+            m = re.match(r"cena(\d+)", arq.name, re.IGNORECASE)
+            if m and int(m.group(1)) not in numeros_roteiro:
+                try:
+                    arq.unlink()
+                    apagados += 1
+                except OSError:
+                    pass
+
     print("-" * 58)
     print(f" PRONTO! {ok} audio(s) gerados em: {PASTA_AUDIO}")
+    if apagados:
+        print(f" ({apagados} audio(s) de videos antigos foram apagados)")
     if puladas:
         print(f" ({puladas} cena(s) sem texto de narracao foram puladas)")
     if CORRIGIR_SILENCIO or abs(VELOCIDADE - 1.0) > 1e-6 or EQ_VOZ:
