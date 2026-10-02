@@ -37,7 +37,9 @@ IDIOMAS_PREF = ("pt-BR", "pt", "en")
 _NAVEGADOR_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
-_YT_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"  # chave publica do YouTube
+# A API Innertube e chamada SEM chave (?key=): a chave publica do player do
+# YouTube e opcional e o GitHub marca ela como segredo - se a Google revogar
+# por exposicao, requests com chave quebram; sem chave continuam funcionando.
 # hosts em ordem de preferencia: a API do Google costuma bloquear menos
 # IP de nuvem do que o youtube.com
 INNERTUBE_HOSTS = (
@@ -239,18 +241,28 @@ def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = Non
     visitor = None        # X-Goog-Visitor-Id reaproveitado entre tentativas
     texto_ok = None       # primeira legenda obtida
     sem_legenda = False   # alguma variante viva respondeu sem trilhas
+    cortado = False       # orcamento ja estourado (avisa so 1x no relatorio)
     t_ini = time.monotonic()
 
     for rot, cli, numero, ua in INNERTUBE_VARIANTES:
         # no modo cadeia, para quando o orcamento acabou
         if orcamento and time.monotonic() - t_ini > ORCAMENTO_TRANSCRICAO:
             ultimo_erro = "orcamento de tempo esgotado (innertube)"
-            if relatorio is not None:
+            if not cortado and relatorio is not None:
                 relatorio.append({"fonte": "innertube",
                                   "status": "pulado (orcamento)",
                                   "ms": 0, "chars": 0})
             break
         for host in INNERTUBE_HOSTS:
+            # corte tambem no meio da variante (hosts podem pendurar 6s+ cada)
+            if orcamento and time.monotonic() - t_ini > ORCAMENTO_TRANSCRICAO:
+                ultimo_erro = "orcamento de tempo esgotado (innertube)"
+                if not cortado and relatorio is not None:
+                    relatorio.append({"fonte": "innertube",
+                                      "status": "pulado (orcamento)",
+                                      "ms": 0, "chars": 0})
+                cortado = True
+                break
             origem = f"innertube:{rot}@{host.split('//')[1]}"
             t0 = time.monotonic()
             try:
@@ -262,8 +274,7 @@ def _transcript_innertube(video_id: str, timeout: int = 8, relatorio: list = Non
                 if visitor:
                     cabecais["X-Goog-Visitor-Id"] = visitor
                 pr = _http_post_json(
-                    f"{host}/youtubei/v1/player"
-                    f"?key={_YT_KEY}&prettyPrint=false",
+                    f"{host}/youtubei/v1/player?prettyPrint=false",
                     {
                         "context": {"client": cli},
                         "videoId": video_id,
@@ -366,7 +377,7 @@ def _transcript_piped(base: str, video_id: str, timeout: int = 6) -> str:
     return texto
 
 
-def get_video_transcript(video_id: str) -> str:
+def get_video_transcript(video_id: str, relatorio: list = None) -> str:
     """Busca a transcricao do video (pt-BR > pt > en).
 
     Cadeia de fontes (todas gratuitas, sem chave propria):
@@ -374,13 +385,14 @@ def get_video_transcript(video_id: str) -> str:
     2) instancias Piped - 1 rodada, rede de seguranca.
     Toda a cadeia tem orcamento de ORCAMENTO_TRANSCRICAO segundos; se tudo
     falhar, levanta ValueError com o motivo (fonte + status + ms) + dica
-    do modo manual.
+    do modo manual. `relatorio` (se informado) recebe cada tentativa.
     """
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id or ""):
         raise ValueError("ID de video invalido")
 
     t_ini = time.monotonic()
-    relatorio = []          # fonte/status/ms/chars de cada tentativa
+    if relatorio is None:
+        relatorio = []       # fonte/status/ms/chars de cada tentativa
     sem_legenda = False
 
     # 1) API interna Innertube (host da API do Google, depois youtube.com)
@@ -429,45 +441,87 @@ def get_video_transcript(video_id: str) -> str:
         + detalhe + "). " + DICA_MANUAL)
 
 
-def diagnosticar_transcript(video_id: str) -> dict:
-    """Testa TODAS as fontes de transcricao e devolve status/tempo de cada uma.
+def _sonda_oembed(video_id: str, timeout: int = 8) -> dict:
+    """Sonda de contexto: o endpoint publico oEmbed do YouTube.
 
-    Feito para diagnosticar o que funciona a partir do servidor (Render):
-    GET /api/diag-transcript?video_id=XXXXXXXXXXX
+    Nao busca legenda nenhuma - serve para saber se o DOMINIO youtube.com
+    responde do servidor: 200 = transporte OK (logo o bloqueio e especifico
+    da Innertube); 403/429/timeout = o dominio inteiro esta bloqueado para
+    este IP e nenhuma fonte direta vai funcionar.
+    """
+    t0 = time.monotonic()
+    url = ("https://www.youtube.com/oembed?format=json&url=https%3A%2F%2F"
+           "www.youtube.com%2Fwatch%3Fv%3D" + video_id)
+    try:
+        corpo = _http_get(url, timeout=timeout)
+        try:
+            titulo = json.loads(corpo).get("title", "")
+        except Exception:
+            titulo = ""
+        return {"status": 200, "ms": int((time.monotonic() - t0) * 1000),
+                "titulo": titulo[:80]}
+    except Exception as e:
+        return {"status": f"{type(e).__name__}: {str(e)[:70]}",
+                "ms": int((time.monotonic() - t0) * 1000), "titulo": ""}
+
+
+def diagnosticar_transcript(video_id: str, completo: bool = False) -> dict:
+    """Diagnostico da busca de transcricao a partir do servidor (Render).
+
+    modo leve (padrao): roda a MESMA cadeia da producao, registrando cada
+    tentativa, + a sonda oEmbed de contexto - poucas requisicoes.
+    modo completo (completo=True): testa TODAS as variantes Innertube x
+    hosts e TODOS os Piped mesmo ja tendo achado a legenda - muitas
+    requisicoes, use so para investigacao.
+
+    GET /api/diag-transcript?video_id=XXX[&completo=1]
     """
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id or ""):
         return {"erro": "ID de video invalido"}
 
-    relatorio = []          # preenchido pelo Innertube
-    innertube_texto = None
-    innertube_erro = None
     t_ini = time.monotonic()
-    try:
-        innertube_texto = _transcript_innertube(video_id, relatorio=relatorio,
-                                                orcamento=False, todas=True)
-    except Exception as e:
-        innertube_erro = str(e)[:200]
+    relatorio = []       # fonte/status/ms/chars de cada tentativa
+    texto = None
+    erro = None
 
-    # roda TODAS as instancias Piped tambem (mesmo ja tendo legenda)
-    piped = []
-    for base in PIPED_INSTANCIAS:
-        t0 = time.monotonic()
+    oembed = _sonda_oembed(video_id)
+
+    if completo:
         try:
-            texto = _transcript_piped(base, video_id)
-            piped.append({"fonte": f"piped:{base}",
-                          "status": "ok" if texto else "ok, sem legenda",
-                          "ms": int((time.monotonic() - t0) * 1000),
-                          "chars": len(texto)})
+            texto = _transcript_innertube(video_id, relatorio=relatorio,
+                                          orcamento=False, todas=True)
         except Exception as e:
-            piped.append({"fonte": f"piped:{base}",
-                          "status": f"{type(e).__name__}: {str(e)[:70]}",
-                          "ms": int((time.monotonic() - t0) * 1000), "chars": 0})
+            erro = str(e)[:200]
+        # todos os Piped tambem, mesmo ja tendo legenda
+        for base in PIPED_INSTANCIAS:
+            t0 = time.monotonic()
+            try:
+                t2 = _transcript_piped(base, video_id)
+                relatorio.append({"fonte": f"piped:{base}",
+                                  "status": "ok" if t2 else "ok, sem legenda",
+                                  "ms": int((time.monotonic() - t0) * 1000),
+                                  "chars": len(t2)})
+                if t2:
+                    texto = texto or t2
+            except Exception as e:
+                relatorio.append({"fonte": f"piped:{base}",
+                                  "status": f"{type(e).__name__}: {str(e)[:70]}",
+                                  "ms": int((time.monotonic() - t0) * 1000),
+                                  "chars": 0})
+    else:
+        try:
+            texto = get_video_transcript(video_id, relatorio=relatorio)
+        except ValueError as e:
+            erro = str(e)[:400]
 
     return {
         "video_id": video_id,
-        "innertube": relatorio,
-        "innertube_texto": (innertube_texto or "")[:120],
-        "innertube_erro": innertube_erro,
-        "piped": piped,
+        "modo": "completo" if completo else "leve",
+        "oembed": oembed,
+        "tentativas": relatorio,
+        "ok": bool(texto),
+        "chars": len(texto or ""),
+        "amostra": (texto or "")[:120],
+        "erro": erro,
         "total_ms": int((time.monotonic() - t_ini) * 1000),
     }

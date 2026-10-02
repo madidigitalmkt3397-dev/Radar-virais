@@ -60,12 +60,14 @@ def get_transcript(data: dict):
 
 
 @app.get("/api/diag-transcript")
-def diag_transcript(video_id: str = "dQw4w9WgXcQ"):
-    """Diagnostico: testa TODAS as fontes de transcricao a partir deste
-    servidor e devolve status/tempo de cada uma. Serve para descobrir o que
-    funciona de la (Render) quando a busca automatica falha."""
+def diag_transcript(video_id: str = "dQw4w9WgXcQ", completo: bool = False):
+    """Diagnostico da busca de transcricao a partir deste servidor.
+
+    Padrao: roda a mesma cadeia da producao e devolve cada tentativa +
+    sonda oEmbed (poucas requisicoes). completo=1 testa TODAS as
+    variantes x hosts (muitas requisicoes - so para investigacao)."""
     try:
-        return diagnosticar_transcript(video_id)
+        return diagnosticar_transcript(video_id, completo=completo)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
