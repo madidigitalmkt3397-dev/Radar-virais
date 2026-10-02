@@ -40,6 +40,15 @@ IDIOMAS_PREF = ("pt-BR", "pt", "en")
 _NAVEGADOR_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
+# API interna do YouTube (Innertube) - o cliente ANDROID nao passa pelo
+# captcha que bloqueia a pagina web nem precisa de chave propria.
+_YT_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"  # chave publica do YouTube
+INNERTUBE_CLIENTES = (
+    ("ANDROID", "20.10.38", "3"),
+    ("ANDROID", "21.45.34", "3"),
+    ("MWEB", "2.20250130.01.00", "2"),
+)
+
 DICA_MANUAL = (
     'Use a secao "Insercao Manual" do site: abra o video no YouTube, '
     'clique em "... > Mostrar transcricao", copie o texto e cole la.'
@@ -143,6 +152,18 @@ def _http_get(url: str, timeout: int = 12) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
+def _http_post_json(url: str, payload: dict, headers: dict = None,
+                    timeout: int = 15) -> dict:
+    """POST JSON simples (usado na API interna Innertube)."""
+    cabecais = {"Content-Type": "application/json", "User-Agent": _NAVEGADOR_UA}
+    if headers:
+        cabecais.update(headers)
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                 headers=cabecais, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
 def _extrair_texto_legenda(corpo: str) -> str:
     """Converte legenda (JSON3 / TTML / WebVTT / SRT) em texto puro."""
     if not corpo or not corpo.strip():
@@ -177,6 +198,61 @@ def _extrair_texto_legenda(corpo: str) -> str:
     return re.sub(r"\s+", " ", texto).strip()
 
 
+def _transcript_innertube(video_id: str, timeout: int = 15):
+    """Transcricao pela API interna do YouTube (Innertube, clientes movel/web).
+
+    Devolve o texto; None quando o video realmente nao tem legenda;
+    levanta Exception quando a fonte falha (ai a cadeia tenta a proxima).
+    """
+    ultimo_erro = "nenhum cliente testado"
+    for nome, ver, numero in INNERTUBE_CLIENTES:
+        try:
+            cliente = {"clientName": nome, "clientVersion": ver,
+                       "hl": "pt", "gl": "BR"}
+            if nome == "ANDROID":
+                cliente["androidSdkVersion"] = 30
+            pr = _http_post_json(
+                f"https://www.youtube.com/youtubei/v1/player"
+                f"?key={_YT_KEY}&prettyPrint=false",
+                {
+                    "context": {"client": cliente},
+                    "videoId": video_id,
+                    "contentCheckOk": True,
+                    "racyCheckOk": True,
+                },
+                {"X-Youtube-Client-Name": numero,
+                 "X-Youtube-Client-Version": ver},
+                timeout=timeout,
+            )
+            status = pr.get("playabilityStatus", {}).get("status")
+            if status not in (None, "OK"):
+                ultimo_erro = f"{nome}: status {status}"
+                continue
+            trilhas = (pr.get("captions", {})
+                         .get("playerCaptionsTracklistRenderer", {})
+                         .get("captionTracks", []))
+            if not trilhas:
+                return None   # respondeu com status OK e o video nao tem legenda
+            # prefere pt-BR > pt > en > a primeira disponivel
+            alvo = None
+            for cod in IDIOMAS_PREF:
+                alvo = next((t for t in trilhas
+                             if (t.get("languageCode") or "").lower()
+                             .startswith(cod.lower())), None)
+                if alvo:
+                    break
+            alvo = alvo or trilhas[0]
+            legenda = _http_get(alvo["baseUrl"] + "&fmt=json3",
+                                timeout=timeout)
+            texto = _extrair_texto_legenda(legenda)
+            if texto:
+                return texto
+            ultimo_erro = f"{nome}: conteudo de legenda vazio"
+        except Exception as e:
+            ultimo_erro = f"{nome}: {str(e)[:80]}"
+    raise RuntimeError(ultimo_erro)
+
+
 def _transcript_piped(base: str, video_id: str, timeout: int = 12) -> str:
     """Pede a transcricao a uma instancia Piped. Devolve '' se nao houver legenda."""
     dados = json.loads(_http_get(f"{base}/streams/{video_id}", timeout=timeout))
@@ -202,17 +278,29 @@ def _transcript_piped(base: str, video_id: str, timeout: int = 12) -> str:
 def get_video_transcript(video_id: str) -> str:
     """Busca a transcricao do video (pt-BR > pt > en).
 
-    1) direto via youtube_transcript_api (funciona quando o IP nao esta bloqueado);
-    2) se o YouTube bloquear o IP (429/captcha), tenta instancias Piped;
-    3) se tudo falhar, levanta ValueError com o motivo + dica do modo manual.
+    Cadeia de fontes (todas gratuitas, sem chave propria):
+    1) API interna Innertube (cliente ANDROID) - nao cai no captcha;
+    2) youtube_transcript_api direto (quando o IP nao esta bloqueado);
+    3) instancias Piped - 2 rodadas, contra falha pontual.
+    Se tudo falhar, levanta ValueError com o motivo + dica do modo manual.
     """
     if not re.fullmatch(r"[A-Za-z0-9_-]{5,20}", video_id or ""):
         raise ValueError("ID de video invalido")
 
     erros = []
+    sem_legenda = False
 
-    # 1) busca direta
-    if YouTubeTranscriptApi is not None:
+    # 1) API interna Innertube
+    try:
+        texto = _transcript_innertube(video_id)
+        if texto:
+            return texto
+        sem_legenda = True   # fonte viva respondeu: o video nao tem legenda
+    except Exception as e:
+        erros.append(f"innertube: {str(e)[:90]}")
+
+    # 2) busca direta
+    if not sem_legenda and YouTubeTranscriptApi is not None:
         try:
             transcript_list = YouTubeTranscriptApi.get_transcript(
                 video_id,
@@ -225,23 +313,25 @@ def get_video_transcript(video_id: str) -> str:
         except Exception as e:
             primeira = str(e).strip().splitlines()
             erros.append(primeira[0] if primeira else type(e).__name__)
-    else:
+    elif not sem_legenda:
         erros.append("busca direta indisponivel (youtube_transcript_api nao instalado)")
 
-    # 2) instancias Piped
-    fonte_viva_sem_legenda = False
-    for base in PIPED_INSTANCIAS:
-        try:
-            texto = _transcript_piped(base, video_id)
-            if texto:
-                return texto
-            fonte_viva_sem_legenda = True   # instancia respondeu, mas sem legenda
-        except Exception as e:
-            erros.append(f"{base}: {str(e)[:90]}")
+    # 3) instancias Piped - 2 rodadas (evita falha pontual de instancia)
+    rodada = 0
+    while not sem_legenda and rodada < 2:
+        rodada += 1
+        for base in PIPED_INSTANCIAS:
+            try:
+                texto = _transcript_piped(base, video_id)
+                if texto:
+                    return texto
+                sem_legenda = True   # instancia viva sem legenda
+            except Exception as e:
+                erros.append(f"{base}: {str(e)[:90]}")
 
     detalhe = "; ".join(erros) if erros else "todas as fontes retornaram vazio"
-    if fonte_viva_sem_legenda:
-        # pelo menos uma instancia viva respondeu: o video nao tem legenda
+    if sem_legenda:
+        # pelo menos uma fonte viva respondeu: o video nao tem legenda
         raise ValueError(
             "Este video nao tem legenda/transcricao disponivel. " + DICA_MANUAL)
     raise ValueError(
