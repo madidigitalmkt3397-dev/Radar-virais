@@ -18,9 +18,9 @@
    - Cenas sem audio ficam em silencio (sem quebrar o render)
    - Normaliza o volume final: -14 LUFS / -1 dB (padrao YouTube)
    - Fase 9: corrige cor, nitidez, zoom Ken Burns e fades
-   - Fase 8: efeitos sonoros - whoosh automatico na virada de cada
-     cena + o efeito_sonoro_sugerido do roteiro (arquivo de
-     banco_efeitos/ ou sintetizado na hora - tudo gratis)
+   - Fase 8: efeitos sonoros - so toca o que estiver em banco_efeitos/
+     (padrao); com SFX_SO_ARQUIVOS = False o render sintetiza
+     whoosh/suspense/heartbeat/ding/impacto na hora (tudo gratis)
 
  Para ligar/desligar: chaves SFX_* no topo do script.
  Efeitos com arquivo (risadas, aplausos...): baixe gratis, salve em
@@ -68,7 +68,7 @@ NORMALIZAR = True
 
 # ---------- FASE 8 - Efeitos sonoros ----------
 SFX_LIGADO = True            # liga/desliga todos os efeitos sonoros
-SFX_SO_ARQUIVOS = False      # True = SO toca arquivo de banco_efeitos/
+SFX_SO_ARQUIVOS = True       # True = SO toca arquivo de banco_efeitos/
                              # (nunca sintetiza; sem arquivo = silencio)
 SFX_TRANSICAO = True         # whoosh automatico na virada de cada cena
 SFX_POR_CENA = True          # usa o efeito_sonoro_sugerido do roteiro
