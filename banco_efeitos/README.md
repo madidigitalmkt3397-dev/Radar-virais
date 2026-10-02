@@ -31,6 +31,8 @@ Depois de baixar: salve aqui e rode `python render_video.py` de novo.
 ## Chaves de ligar/desligar (render_video.py)
 
 - `SFX_LIGADO` — liga/desliga todos os efeitos
+- `SFX_SO_ARQUIVOS` — `True` = **só** toca o que estiver nesta pasta
+  (nunca sintetiza; sem arquivo = silêncio)
 - `SFX_TRANSICAO` — whoosh nas trocas
 - `SFX_POR_CENA` — efeito sugerido no roteiro
 - `SFX_VOLUME` / `SFX_VOLUME_TRANSICAO` — volume (0.0 a 1.0)

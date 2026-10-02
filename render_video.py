@@ -68,6 +68,8 @@ NORMALIZAR = True
 
 # ---------- FASE 8 - Efeitos sonoros ----------
 SFX_LIGADO = True            # liga/desliga todos os efeitos sonoros
+SFX_SO_ARQUIVOS = False      # True = SO toca arquivo de banco_efeitos/
+                             # (nunca sintetiza; sem arquivo = silencio)
 SFX_TRANSICAO = True         # whoosh automatico na virada de cada cena
 SFX_POR_CENA = True          # usa o efeito_sonoro_sugerido do roteiro
 SFX_VOLUME = 0.6             # volume dos efeitos (0.0 a 1.0)
@@ -679,6 +681,7 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
       - whoosh na virada de cada cena (automatico, comeca antes do corte)
       - efeito_sonoro_sugerido de cada cena (arquivo do banco_efeitos/
         ou sintetizado na hora)
+      - SFX_SO_ARQUIVOS = True: so toca arquivo do banco (sem sintetizar)
     `audios` recebe os arquivos abertos (o finally do principal fecha).
     """
     from moviepy import CompositeAudioClip
@@ -688,6 +691,7 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
     sintetizados = 0
     do_banco = 0
     faltando = []
+    ignorados = 0
 
     for i, info in enumerate(cenas_info):
         inicio = float(info["inicio"])
@@ -699,6 +703,7 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
 
         # --- 1) efeito sugerido no roteiro ---
         clip_efeito = None
+        efeito_colocado = False
         if SFX_POR_CENA and sugerido_norm:
             arquivo = _achar_sfx(sugerido_norm, exceto=SFX_TRANSICAO_NOMES)
             if arquivo is not None:
@@ -706,6 +711,8 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
                 if clip_efeito is not None:
                     audios.append(clip_efeito)
                     do_banco += 1
+            elif SFX_SO_ARQUIVOS:
+                ignorados += 1       # so-arquivos: sem arquivo = silencio
             elif tipo is not None:
                 clip_efeito = _criar_clip_sfx(
                     tipo=tipo, duracao_cena=dur_cena
@@ -718,11 +725,14 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
                 if e_whoosh and i > 0:
                     # o proprio whoosh da cena faz o papel de transicao
                     onde = max(0.0, inicio - SFX_ANTES_DO_CORTE)
-                _encaixar(faixas, clip_efeito, onde, dur_total)
+                efeito_colocado = _encaixar(
+                    faixas, clip_efeito, onde, dur_total
+                )
 
-        # --- 2) whoosh da transicao (se a cena nao ja e whoosh) ---
-        if SFX_TRANSICAO and i > 0 and not e_whoosh:
+        # --- 2) whoosh da transicao (se a cena nao ja colocou um whoosh) ---
+        if SFX_TRANSICAO and i > 0 and not (e_whoosh and efeito_colocado):
             arquivo_t = _achar_transicao()
+            clipe = None
             if arquivo_t is not None:
                 clipe = _criar_clip_sfx(
                     caminho=arquivo_t, volume=SFX_VOLUME_TRANSICAO
@@ -730,7 +740,7 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
                 if clipe is not None:
                     audios.append(clipe)
                     do_banco += 1
-            else:
+            elif not SFX_SO_ARQUIVOS:
                 clipe = _criar_clip_sfx(
                     tipo="whoosh", volume=SFX_VOLUME_TRANSICAO
                 )
@@ -742,7 +752,11 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
                 )
 
     if not faixas:
-        print("[sfx] nenhum efeito sonoro para adicionar")
+        if ignorados:
+            print(f"[sfx] banco_efeitos/ vazio para este roteiro "
+                  f"({ignorados} cena(s) sem arquivo; modo so-arquivos)")
+        else:
+            print("[sfx] nenhum efeito sonoro para adicionar")
         return final
 
     base = [final.audio] if final.audio is not None else []
@@ -752,6 +766,9 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
     final = final.with_audio(mistura)
     print(f"[OK] Efeitos sonoros: {sintetizados} sintetizado(s) "
           f"+ {do_banco} do banco_efeitos/")
+    if ignorados:
+        print(f"     modo so-arquivos: {ignorados} cena(s) sem arquivo "
+              "no banco (ficaram em silencio)")
     if faltando:
         print("     sem arquivo (baixe gratis e salve em banco_efeitos/): "
               + ", ".join(faltando))
