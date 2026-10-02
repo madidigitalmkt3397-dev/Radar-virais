@@ -18,9 +18,13 @@
    - Cenas sem audio ficam em silencio (sem quebrar o render)
    - Normaliza o volume final: -14 LUFS / -1 dB (padrao YouTube)
    - Fase 9: corrige cor, nitidez, zoom Ken Burns e fades
+   - Fase 8: efeitos sonoros - whoosh automatico na virada de cada
+     cena + o efeito_sonoro_sugerido do roteiro (arquivo de
+     banco_efeitos/ ou sintetizado na hora - tudo gratis)
 
- Futuro: efeitos sonoros de `banco_efeitos/` (ver roteiro:
- campo efeito_sonoro_sugerido de cada cena).
+ Para ligar/desligar: chaves SFX_* no topo do script.
+ Efeitos com arquivo (risadas, aplausos...): baixe gratis, salve em
+ banco_efeitos/ com o nome da sugestao e rode de novo (ver README).
 ===========================================================
 """
 
@@ -42,10 +46,12 @@ PASTA_CENAS = BASE / "cenas"
 PASTA_AUDIO = BASE / "audio"
 PASTA_SAIDA = BASE / "output"
 ARQUIVO_ROTEIRO = BASE / "roteiro.json"
+PASTA_SFX = BASE / "banco_efeitos"
 
 EXTENSOES_VIDEO = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 EXTENSOES_IMAGEM = {".png", ".jpg", ".jpeg", ".webp"}
 EXTENSOES_AUDIO = {".mp3", ".wav"}
+EXTENSOES_SFX = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}
 
 TEMPO_IMAGEM_SEGUNDOS = 3.0  # duracao de cada imagem fixa (sem narracao)
 FPS_PADRAO = 30
@@ -59,6 +65,13 @@ COMO_ESTICAR = "lento"
 # Fase 7 - Normaliza o volume do video final no padrao das redes sociais
 # (-14 LUFS com teto de -1 dB = YouTube, TikTok e Instagram nunca cortam o som)
 NORMALIZAR = True
+
+# ---------- FASE 8 - Efeitos sonoros ----------
+SFX_LIGADO = True            # liga/desliga todos os efeitos sonoros
+SFX_TRANSICAO = True         # whoosh automatico na virada de cada cena
+SFX_POR_CENA = True          # usa o efeito_sonoro_sugerido do roteiro
+SFX_VOLUME = 0.6             # volume dos efeitos (0.0 a 1.0)
+SFX_VOLUME_TRANSICAO = 0.5   # volume do whoosh das trocas
 
 # ---------- FASE 9 - Imagem viva (edite para ligar/desligar) ----------
 ZOOM_DINAMICO = True      # Ken Burns: zoom sutil em cada cena
@@ -364,6 +377,317 @@ def tratar_imagem(clip, numero, primeira, ultima):
     return clip
 
 
+# ================ FASE 8 - Efeitos sonoros ================
+# Quem sintetiza aqui mesmo (custo zero, numpy puro) e quem precisa
+# de arquivo em banco_efeitos/:
+TIPOS_SINTETIZAVEIS = {
+    "whoosh": ("whoosh", "swoosh"),
+    "suspense": ("suspense", "suspenso", "tensao"),
+    "heartbeat": ("heartbeat", "batimento", "coracao"),
+    "ding": ("ding", "sino"),
+    "impacto": ("impacto", "impact", "boom", "batida"),
+}
+FS_SFX = 44100
+SFX_TRANSICAO_NOMES = ("swoosh", "transicao", "transition")
+SFX_ANTES_DO_CORTE = 0.25  # whoosh comeca antes do corte p/ bater nele
+
+
+def _normalizar_texto(txt):
+    """Minusculas e sem acento (sugestoes vem em ingles ou pt-BR)."""
+    import unicodedata
+    txt = str(txt or "").lower().strip()
+    return "".join(
+        c for c in unicodedata.normalize("NFD", txt)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def _estereo(mono):
+    import numpy as np
+    return np.repeat(np.asarray(mono, "float32")[:, None], 2, axis=1)
+
+
+def _com_pico(som, pico):
+    import numpy as np
+    maximo = float(np.abs(som).max())
+    if maximo < 1e-9:
+        return som
+    return som * (pico / maximo)
+
+
+def _synth_whoosh(dur=0.55):
+    """Tsswsh - ruido com corte que sobe e desce (som de transicao)."""
+    import numpy as np
+    rng = np.random.default_rng(101)
+    n = int(dur * FS_SFX)
+    t = np.arange(n) / FS_SFX
+    ruido = rng.standard_normal(n)
+    fc = 250.0 + 3000.0 * np.sin(np.pi * t / dur) ** 1.3
+    alfa = 1.0 - np.exp(-2.0 * np.pi * fc / FS_SFX)
+    saida = np.empty(n, "float32")
+    y = 0.0
+    for i in range(n):                 # filtro 1 polo com corte variavel
+        y += alfa[i] * (ruido[i] - y)
+        saida[i] = y
+    saida *= np.sin(np.pi * t / dur) ** 2   # sobe e cai sem clique
+    return _estereo(_com_pico(saida, 0.85))
+
+
+def _synth_ding():
+    """Campainha de acerto - 3 tons com caida exponencial."""
+    import numpy as np
+    n = int(1.3 * FS_SFX)
+    t = np.arange(n) / FS_SFX
+    som = (np.sin(2 * np.pi * 880.0 * t) * 0.60
+           + np.sin(2 * np.pi * 1318.5 * t) * 0.40
+           + np.sin(2 * np.pi * 2637.0 * t) * 0.15 * np.exp(-t * 8.0))
+    som *= np.exp(-t * 3.0) * np.minimum(t / 0.004, 1.0)
+    return _estereo(_com_pico(som, 0.80))
+
+
+def _synth_impacto():
+    """Boom - batida grave que desce de 100Hz para 40Hz + clique."""
+    import numpy as np
+    n = int(0.7 * FS_SFX)
+    t = np.arange(n) / FS_SFX
+    f = 40.0 + 60.0 * np.exp(-t * 4.0)
+    fase = 2.0 * np.pi * np.cumsum(f) / FS_SFX
+    som = np.sin(fase) * np.exp(-t * 5.0)
+    clique = np.zeros(n)
+    n_cli = int(0.012 * FS_SFX)
+    rng = np.random.default_rng(5)
+    clique[:n_cli] = rng.standard_normal(n_cli) * np.exp(
+        -np.arange(n_cli) / (0.003 * FS_SFX)
+    )
+    som = som * 0.9 + clique * 0.35
+    return _estereo(_com_pico(som, 0.90))
+
+
+def _synth_heartbeat(dur_cena):
+    """Lub-dub grave repetindo - tensao de coracao acelerado."""
+    import numpy as np
+    dur = float(min(max(dur_cena, 2.0), 7.0))
+    n = int(dur * FS_SFX)
+    saida = np.zeros(n, "float32")
+
+    def batida(pos, forca):
+        i0 = int(pos * FS_SFX)
+        larg = int(0.18 * FS_SFX)
+        if i0 + larg >= n:
+            return
+        tt = np.arange(larg) / FS_SFX
+        pacote = (np.sin(2 * np.pi * 65.0 * tt)
+                  + 0.45 * np.sin(2 * np.pi * 130.0 * tt))
+        pacote *= np.exp(-((tt - 0.05) / 0.05) ** 2) * forca
+        saida[i0:i0 + larg] += pacote
+
+    pos = 0.12
+    while pos + 0.45 < dur:
+        batida(pos, 1.0)               # lub
+        batida(pos + 0.20, 0.62)       # dub
+        pos += 0.95                    # ~63 bpm
+    return _estereo(_com_pico(saida, 0.70))
+
+
+def _synth_suspense(dur_cena):
+    """Drone grave que respira - cama de tensao (fica ABAIXO da voz)."""
+    import numpy as np
+    dur = float(min(max(dur_cena, 1.5), 6.0))
+    n = int(dur * FS_SFX)
+    t = np.arange(n) / FS_SFX
+    drone = ((np.sin(2 * np.pi * 55.0 * t) + np.sin(2 * np.pi * 55.5 * t)) * 0.5
+             + np.sin(2 * np.pi * 82.5 * t) * 0.35)
+    respira = 0.55 + 0.45 * np.sin(2 * np.pi * 0.5 * t - np.pi / 2)
+    rng = np.random.default_rng(7)
+    kernel = np.ones(96) / 96.0        # ruido suave = textura de vento
+    tex = np.convolve(rng.standard_normal(n), kernel, mode="same")
+    tex = tex / max(float(np.abs(tex).max()), 1e-9)
+    som = drone * respira + tex * 0.30
+    fade = int(min(0.35, dur / 3) * FS_SFX)
+    som[:fade] *= np.linspace(0.0, 1.0, fade) ** 1.5
+    som[-fade:] *= np.linspace(1.0, 0.0, fade) ** 1.5
+    return _estereo(_com_pico(som, 0.35))
+
+
+def _sintetizar(tipo, duracao_cena):
+    """Gera o efeito em memoria. None = nao da para sintetizar."""
+    if tipo == "whoosh":
+        return _synth_whoosh()
+    if tipo == "ding":
+        return _synth_ding()
+    if tipo == "impacto":
+        return _synth_impacto()
+    if tipo == "heartbeat":
+        return _synth_heartbeat(duracao_cena)
+    if tipo == "suspense":
+        return _synth_suspense(duracao_cena)
+    return None
+
+
+def _tipo_efeito(sugerido_norm):
+    """whoosh/suspense/heartbeat/ding/impacto, ou None (ex.: aplausos)."""
+    for tipo, chaves in TIPOS_SINTETIZAVEIS.items():
+        if any(chave in sugerido_norm for chave in chaves):
+            return tipo
+    return None
+
+
+def _achar_sfx(termo_norm, exceto=()):
+    """Procura em banco_efeitos/ um arquivo que case com a sugestao."""
+    if not PASTA_SFX.exists() or not termo_norm:
+        return None
+    arquivos = [
+        a for a in sorted(PASTA_SFX.iterdir())
+        if a.suffix.lower() in EXTENSOES_SFX
+        and _normalizar_texto(a.stem) not in exceto
+    ]
+    # 1) nome do arquivo aparece na sugestao (ou vice-versa)
+    for a in arquivos:
+        nome = _normalizar_texto(a.stem)
+        if nome in termo_norm or termo_norm in nome:
+            return a
+    # 2) alguma palavra (>= 4 letras) em comum
+    for a in arquivos:
+        palavras = [p for p in re.split(r"[\s_\-]+", _normalizar_texto(a.stem))
+                    if len(p) >= 4]
+        if any(p in termo_norm for p in palavras):
+            return a
+    return None
+
+
+def _achar_transicao():
+    """swoosh.wav / transicao.wav no banco_efeitos/ (opcional)."""
+    if not PASTA_SFX.exists():
+        return None
+    for a in sorted(PASTA_SFX.iterdir()):
+        if (a.suffix.lower() in EXTENSOES_SFX
+                and _normalizar_texto(a.stem) in SFX_TRANSICAO_NOMES):
+            return a
+    return None
+
+
+def _criar_clip_sfx(caminho=None, tipo=None, duracao_cena=0.0, volume=None):
+    """Monta o clipe do efeito (arquivo do banco ou sintetizado)."""
+    from moviepy import AudioArrayClip, AudioFileClip, afx
+    if caminho is not None:
+        clipe = AudioFileClip(str(caminho))
+    else:
+        som = _sintetizar(tipo, duracao_cena)
+        if som is None:
+            return None
+        clipe = AudioArrayClip(som, FS_SFX)
+    return clipe.with_effects([
+        afx.MultiplyVolume(volume if volume is not None else SFX_VOLUME),
+        afx.AudioFadeIn(0.02),
+        afx.AudioFadeOut(0.08),
+    ])
+
+
+def _encaixar(faixas, clipe, onde, dur_total):
+    """Posiciona o efeito no tempo; corta se passar do fim do video."""
+    restante = dur_total - onde
+    if restante <= 0.05:
+        return False
+    if clipe.duration > restante:
+        clipe = clipe.subclipped(0, restante)
+    faixas.append(clipe.with_start(onde))
+    return True
+
+
+def _sugestao_do_roteiro(roteiro, numero):
+    if not roteiro or not isinstance(roteiro.get("cenas"), list):
+        return ""
+    for cena in roteiro["cenas"]:
+        if isinstance(cena, dict) and cena.get("numero") == numero:
+            return cena.get("efeito_sonoro_sugerido") or ""
+    return ""
+
+
+def juntar_efeitos_sonicos(final, cenas_info, audios):
+    """
+    Fase 8 - mistura os efeitos sonoros no video final:
+      - whoosh na virada de cada cena (automatico, comeca antes do corte)
+      - efeito_sonoro_sugerido de cada cena (arquivo do banco_efeitos/
+        ou sintetizado na hora)
+    `audios` recebe os arquivos abertos (o finally do principal fecha).
+    """
+    from moviepy import CompositeAudioClip
+
+    dur_total = final.duration
+    faixas = []
+    sintetizados = 0
+    do_banco = 0
+    faltando = []
+
+    for i, info in enumerate(cenas_info):
+        inicio = float(info["inicio"])
+        dur_cena = float(info["duracao"])
+        sugerido_norm = _normalizar_texto(info["sugerido"])
+        tipo = _tipo_efeito(sugerido_norm) if sugerido_norm else None
+        e_whoosh = tipo == "whoosh" or "whoosh" in sugerido_norm \
+            or "swoosh" in sugerido_norm
+
+        # --- 1) efeito sugerido no roteiro ---
+        clip_efeito = None
+        if SFX_POR_CENA and sugerido_norm:
+            arquivo = _achar_sfx(sugerido_norm, exceto=SFX_TRANSICAO_NOMES)
+            if arquivo is not None:
+                clip_efeito = _criar_clip_sfx(caminho=arquivo)
+                if clip_efeito is not None:
+                    audios.append(clip_efeito)
+                    do_banco += 1
+            elif tipo is not None:
+                clip_efeito = _criar_clip_sfx(
+                    tipo=tipo, duracao_cena=dur_cena
+                )
+                sintetizados += 1
+            else:
+                faltando.append(str(info["sugerido"]).strip())
+            if clip_efeito is not None:
+                onde = inicio
+                if e_whoosh and i > 0:
+                    # o proprio whoosh da cena faz o papel de transicao
+                    onde = max(0.0, inicio - SFX_ANTES_DO_CORTE)
+                _encaixar(faixas, clip_efeito, onde, dur_total)
+
+        # --- 2) whoosh da transicao (se a cena nao ja e whoosh) ---
+        if SFX_TRANSICAO and i > 0 and not e_whoosh:
+            arquivo_t = _achar_transicao()
+            if arquivo_t is not None:
+                clipe = _criar_clip_sfx(
+                    caminho=arquivo_t, volume=SFX_VOLUME_TRANSICAO
+                )
+                if clipe is not None:
+                    audios.append(clipe)
+                    do_banco += 1
+            else:
+                clipe = _criar_clip_sfx(
+                    tipo="whoosh", volume=SFX_VOLUME_TRANSICAO
+                )
+                sintetizados += 1
+            if clipe is not None:
+                _encaixar(
+                    faixas, clipe,
+                    max(0.0, inicio - SFX_ANTES_DO_CORTE), dur_total,
+                )
+
+    if not faixas:
+        print("[sfx] nenhum efeito sonoro para adicionar")
+        return final
+
+    base = [final.audio] if final.audio is not None else []
+    mistura = CompositeAudioClip(base + faixas)
+    # MoviePy 2: CompositeAudioClip nasce com duration None - obriga explicito
+    mistura = mistura.with_duration(dur_total)
+    final = final.with_audio(mistura)
+    print(f"[OK] Efeitos sonoros: {sintetizados} sintetizado(s) "
+          f"+ {do_banco} do banco_efeitos/")
+    if faltando:
+        print("     sem arquivo (baixe gratis e salve em banco_efeitos/): "
+              + ", ".join(faltando))
+    return final
+
+
 def principal():
     print("=" * 58)
     print(" FASE 6 - Render do video final")
@@ -412,6 +736,8 @@ def principal():
     clips = []
     audios = []
     com_narracao = 0
+    cenas_info = []      # Fase 8: inicio/duracao/sugestao de cada cena
+    inicio_cena = 0.0
     try:
         for indice, (ordem, arq) in enumerate(cenas):
             ext = arq.suffix.lower()
@@ -445,6 +771,13 @@ def principal():
                 clip = clip.with_audio(audio)  # salvaguarda: efeitos nunca perdem a voz
 
             clips.append(clip)
+            cenas_info.append({
+                "numero": ordem,
+                "inicio": inicio_cena,
+                "duracao": clip.duration or 0.0,
+                "sugerido": _sugestao_do_roteiro(roteiro, ordem),
+            })
+            inicio_cena += clip.duration or 0.0
 
         print(f"[OK] Narração em {com_narracao}/{len(cenas)} cena(s)")
         if com_narracao < len(cenas):
@@ -453,6 +786,12 @@ def principal():
         # 5. Junta tudo (cenas com audio + cenas sem = CompositeAudioClip, sem erro)
         print("[...] Juntando as cenas...")
         final = concatenate_videoclips(clips, method="compose")
+
+        # Fase 8 - whoosh nas trocas + efeito sugerido no roteiro
+        if SFX_LIGADO:
+            final = juntar_efeitos_sonicos(final, cenas_info, audios)
+        else:
+            print("[sfx] efeitos sonoros desligados (SFX_LIGADO = False)")
 
         PASTA_SAIDA.mkdir(exist_ok=True)
         destino = PASTA_SAIDA / NOME_SAIDA
