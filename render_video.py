@@ -48,6 +48,12 @@ BASE = Path(__file__).resolve().parent
 PASTA_CENAS = BASE / "cenas"
 PASTA_AUDIO = BASE / "audio"
 PASTA_SAIDA = BASE / "output"
+# Normaliza o tamanho das cenas antes de juntar: a PRIMEIRA cena define a
+# tela final e as demais sao ajustadas (escala + corte central, sem borda
+# preta). Sem isto, o compose do MoviePy usa a maior largura x a maior
+# altura entre TODAS as cenas - cenas de resolucoes diferentes viram um
+# video com moldura preta (ou quadrado, se alguma cena for 16:9).
+AJUSTAR_TAMANHO = True
 ARQUIVO_ROTEIRO = BASE / "roteiro.json"
 PASTA_SFX = BASE / "banco_efeitos"
 
@@ -303,6 +309,52 @@ def _zoom_central(img, escala, dx=0.0, dy=0.0):
     topo = c00 + (c01 - c00) * wx
     baixo = c10 + (c11 - c10) * wx
     return topo + (baixo - topo) * wy
+
+
+def _redimensionar_quadro(img, tw, th):
+    """Redimensiona o quadro para exatamente (tw, th) - corte central (cover).
+
+    Escala na menor razao que COBRE o alvo e corta o excedente pelo centro:
+    nunca sobra borda preta, nao importa o tamanho de origem. Aceita uint8
+    (0-255) e float, preservando o dtype de entrada. Feito em numpy de
+    proposito (mesma razao do _zoom_central: o resized() do MoviePy 2
+    trunca quadros).
+    """
+    import numpy as np
+
+    h, w = img.shape[:2]
+    if (w, h) == (tw, th):
+        return img
+    escala = max(tw / w, th / h)
+    # janela da fonte que cabe no alvo (cover), centrada
+    x0 = (w - tw / escala) / 2.0
+    y0 = (h - th / escala) / 2.0
+    xx = x0 + (np.arange(tw, dtype="float64") + 0.5) / escala - 0.5
+    yy = y0 + (np.arange(th, dtype="float64") + 0.5) / escala - 0.5
+    xi = np.clip(np.floor(xx).astype("int64"), 0, w - 1)
+    yi = np.clip(np.floor(yy).astype("int64"), 0, h - 1)
+    xi1 = np.clip(xi + 1, 0, w - 1)
+    yi1 = np.clip(yi + 1, 0, h - 1)
+    fx = np.clip(xx - xi, 0.0, 1.0).astype("float32")
+    fy = np.clip(yy - yi, 0.0, 1.0).astype("float32")
+
+    p00 = img[np.ix_(yi, xi)]
+    p01 = img[np.ix_(yi, xi1)]
+    p10 = img[np.ix_(yi1, xi)]
+    p11 = img[np.ix_(yi1, xi1)]
+    # mascara 2D: (th, tw) | RGB/RGBA: (th, tw, c) - o reshape acomoda os dois
+    dim_extra = img.ndim - 2
+    fx = fx.reshape((1, tw) + (1,) * dim_extra)
+    fy = fy.reshape((th, 1) + (1,) * dim_extra)
+    cima = p00 * (1.0 - fx) + p01 * fx
+    baixo = p10 * (1.0 - fx) + p11 * fx
+    saida = cima * (1.0 - fy) + baixo * fy
+    if np.issubdtype(img.dtype, np.integer):
+        saida = np.clip(np.rint(saida), 0,
+                        np.iinfo(img.dtype).max).astype(img.dtype)
+    else:
+        saida = saida.astype(img.dtype)
+    return saida
 
 
 def _montar_transform(espelhar: bool, flash: bool, zoom):
@@ -1297,6 +1349,7 @@ def principal():
 
     # 4. Carrega as cenas + narracao
     clips = []
+    alvo = None   # tela final = tamanho da PRIMEIRA cena (ver AJUSTAR_TAMANHO)
     audios = []
     com_narracao = 0
     resumo_cortes = []   # Fase 10: (numero, n_cortes) de cada cena
@@ -1312,6 +1365,20 @@ def principal():
                 clip = ImageClip(str(arq)).with_duration(TEMPO_IMAGEM_SEGUNDOS)
             else:
                 clip = VideoFileClip(str(arq))
+
+            # Ajusta resolucoes diferentes a tela da cena 1 (cover + corte
+            # central) - sem isto o compose do MoviePy centraliza a cena
+            # menor com moldura preta (ou a tela vira quadrada)
+            if AJUSTAR_TAMANHO:
+                if alvo is None:
+                    alvo = tuple(clip.size)
+                elif tuple(clip.size) != alvo:
+                    antes = tuple(clip.size)
+                    clip = clip.image_transform(
+                        lambda f: _redimensionar_quadro(f, *alvo),
+                        apply_to="mask")
+                    print(f" [{antes[0]}x{antes[1]} -> {alvo[0]}x{alvo[1]}]",
+                          end="", flush=True)
 
             narracao = localizar_narracao(ordem)
             audio = None
