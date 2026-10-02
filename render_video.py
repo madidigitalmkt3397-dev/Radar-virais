@@ -21,6 +21,9 @@
    - Fase 8: efeitos sonoros - so toca o que estiver em banco_efeitos/
      (padrao); com SFX_SO_ARQUIVOS = False o render sintetiza
      whoosh/suspense/heartbeat/ding/impacto na hora (tudo gratis)
+    - Fase 10: Cut Engine - cortes internos na cadencia da narração
+      (chave PERFIL_CORTES: "normal" 2-4s | "rapida" 1-2,5s |
+      "muito_rapida" 0,7-1,8s - padrao: rapida)
 
  Para ligar/desligar: chaves SFX_* no topo do script.
  Efeitos com arquivo (risadas, aplausos...): baixe gratis, salve em
@@ -93,6 +96,28 @@ FLASH_DURACAO = 0.15      # duracao do flash (s)
 FLASH_FORCA = 0.75        # 0.0 a 1.0 (1.0 = tela branca total)
 ESPELHAR_CLIPES = False   # espelha clipes (cuidado: vira o texto de lado)
 INVERTER_CORES = False    # inverte as cores (efeito psicodelico)
+
+
+# ---------- FASE 10 - Cut Engine (cortes no ritmo da narração) ----------
+CUT_ENGINE = True           # liga/desliga o motor de cortes internos
+PERFIL_CORTES = "rapida"    # "normal" (2-4s) | "rapida" (1-2,5s) |
+                            # "muito_rapida" (0,7-1,8s)
+CUT_SFX = "auto"            # whoosh nos cortes internos:
+                            # "auto" = so no perfil muito_rapida |
+                            # True = em todos | False = nunca
+CUT_SFX_VOLUME = 0.3        # volume do whoosh dos cortes internos
+CUT_MARGEM_CENA = 0.45      # nao corta nos X s iniciais/finais da cena
+
+# duracao alvo de cada plano + forca visual (zoom/pan) por perfil
+# "salto" = troca minima de escala no limite de cada corte (o corte visual)
+PERFIS_CORTES = {
+    "normal":       {"min": 2.0, "max": 4.0, "forca": 0.05,
+                     "pan": 0.04, "impacto": 0.06, "salto": 0.045},
+    "rapida":       {"min": 1.0, "max": 2.5, "forca": 0.09,
+                     "pan": 0.07, "impacto": 0.12, "salto": 0.06},
+    "muito_rapida": {"min": 0.7, "max": 1.8, "forca": 0.13,
+                     "pan": 0.10, "impacto": 0.16, "salto": 0.075},
+}
 
 
 def descobrir_cenas():
@@ -238,17 +263,22 @@ def _desfoque_3x3(img):
     return acc / 16.0
 
 
-def _zoom_central(img, escala):
+def _zoom_central(img, escala, dx=0.0, dy=0.0):
     """
-    Amplia o quadro em torno do centro (bilinear) mantendo o tamanho original.
+    Amplia o quadro em torno de um centro (bilinear) mantendo o tamanho original.
     escala >= 1.0 sempre - por isso NUNCA aparece borda preta.
+    dx/dy (fracao da largura/altura) deslocam o enquadramento (pan do
+    Cut Engine); as coordenadas sao limitadas aos bordos - pan alem do
+    sobrado vira apenas o maximo possivel (nunca preto).
     FEITO EM NUMPY DE PROPOSITO: o resized() do MoviePy 2 trunca quadros
     float para uint8 (bug) e deixaria o video todo preto.
     """
     import numpy as np
     h, w = img.shape[:2]
-    yy = (np.arange(h, dtype="float64") + 0.5 - h / 2) / escala + h / 2 - 0.5
-    xx = (np.arange(w, dtype="float64") + 0.5 - w / 2) / escala + w / 2 - 0.5
+    cxp = w / 2.0 + float(dx) * w
+    cyp = h / 2.0 + float(dy) * h
+    yy = (np.arange(h, dtype="float64") + 0.5 - cyp) / escala + cyp - 0.5
+    xx = (np.arange(w, dtype="float64") + 0.5 - cxp) / escala + cxp - 0.5
     yy = np.clip(yy, 0, h - 1)
     xx = np.clip(xx, 0, w - 1)
 
@@ -271,7 +301,8 @@ def _zoom_central(img, escala):
 def _montar_transform(espelhar: bool, flash: bool, zoom):
     """
     Funcao de quadro da Fase 9 (roda em TODOS os frames):
-      - zoom Ken Burns (zoom = (inicio, fim, duracao) ou None)
+      - zoom Ken Burns: classico (zoom = (inicio, fim, duracao)) OU o
+        plano chamavel do Cut Engine (devolve escala, dx, dy, espelhar)
       - efeitos opcionais: espelhar, preto e branco, inverter cores
       - correcao de cor: contraste + brilho + saturacao (+15%)
       - nitidez (unsharp mask)
@@ -293,13 +324,30 @@ def _montar_transform(espelhar: bool, flash: bool, zoom):
         if origem_255:
             rgb /= 255.0
 
-        if ESPELHAR_CLIPES and espelhar:
+        # Cut Engine (Fase 10): o plano do segundo `t` devolve
+        # (escala, dx, dy, espelhar) - a troca brusca de enquadramento
+        # no limite dos planos e o proprio CORTE visual
+        escala_cut = None
+        dx_cut = dy_cut = 0.0
+        espelhar_aqui = espelhar
+        if callable(zoom):
+            plano = zoom(float(t))
+            if plano is not None:
+                escala_cut, dx_cut, dy_cut, espelhar_aqui = plano
+
+        if ESPELHAR_CLIPES and espelhar_aqui:
             rgb = rgb[:, ::-1]
             if alpha is not None:
                 alpha = alpha[:, ::-1]
 
-        # Ken Burns: escala sempre >= 1.0 (amplia, nunca reduz)
-        if zoom is not None:
+        if escala_cut is not None:
+            # Ken Burns do Cut Engine: escala/enquadramento do plano atual
+            if escala_cut > 1.0 or dx_cut or dy_cut:
+                rgb = _zoom_central(rgb, escala_cut, dx_cut, dy_cut)
+                if alpha is not None:
+                    alpha = _zoom_central(alpha, escala_cut, dx_cut, dy_cut)
+        elif zoom is not None:
+            # Ken Burns classico da Fase 9 (escala sempre >= 1.0)
             inicio, fim, dur = zoom
             if dur > 0:
                 frac = min(max(float(t), 0.0) / dur, 1.0)
@@ -346,13 +394,15 @@ def _montar_transform(espelhar: bool, flash: bool, zoom):
     return processar
 
 
-def tratar_imagem(clip, numero, primeira, ultima):
+def tratar_imagem(clip, numero, primeira, ultima, planos=None):
     """
     Fase 9 - da vida aos clipes:
       1. processamento por quadro: zoom Ken Burns (sempre >= 100% - sem
          borda preta), correcao de cor, nitidez e efeitos opcionais
       2. fades: so a 1a cena surge do preto e a ultima termina no preto
         (nas trocas do meio fica corte seco - pisca preto se fosse em tudo)
+      planos (Fase 10): pedacos do Cut Engine - a troca brusca de
+        enquadramento no limite de cada plano e o corte visual
     """
     from moviepy import vfx
 
@@ -361,7 +411,10 @@ def tratar_imagem(clip, numero, primeira, ultima):
 
     # Ken Burns: cenas impares aproximam, pares afastam (variedade visual)
     zoom = None
-    if ZOOM_DINAMICO and ESCALA_ZOOM > 1.0 and clip.duration and clip.duration > 0:
+    if planos:
+        # Fase 10 - Cut Engine: um plano por pedaco entre cortes
+        zoom = _fn_planos(planos)
+    elif ZOOM_DINAMICO and ESCALA_ZOOM > 1.0 and clip.duration and clip.duration > 0:
         if numero % 2 == 0:
             zoom = (ESCALA_ZOOM, 1.0, clip.duration)
         else:
@@ -692,6 +745,7 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
     do_banco = 0
     faltando = []
     ignorados = 0
+    cortes_sfx = 0
 
     for i, info in enumerate(cenas_info):
         inicio = float(info["inicio"])
@@ -751,6 +805,31 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
                     max(0.0, inicio - SFX_ANTES_DO_CORTE), dur_total,
                 )
 
+        # --- 3) whoosh dos cortes internos (Fase 10 - Cut Engine) ---
+        if info.get("cortes") and _cut_sfx_ativo():
+            arquivo_t = _achar_transicao()
+            for t_corte in info["cortes"]:
+                clipe = None
+                if arquivo_t is not None:
+                    clipe = _criar_clip_sfx(
+                        caminho=arquivo_t, volume=CUT_SFX_VOLUME
+                    )
+                    if clipe is not None:
+                        audios.append(clipe)
+                        do_banco += 1
+                elif not SFX_SO_ARQUIVOS:
+                    clipe = _criar_clip_sfx(
+                        tipo="whoosh", volume=CUT_SFX_VOLUME
+                    )
+                    sintetizados += 1
+                if clipe is not None:
+                    cortes_sfx += 1
+                    _encaixar(
+                        faixas, clipe,
+                        max(0.0, inicio + t_corte - SFX_ANTES_DO_CORTE),
+                        dur_total,
+                    )
+
     if not faixas:
         if ignorados:
             print(f"[sfx] banco_efeitos/ vazio para este roteiro "
@@ -769,10 +848,393 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
     if ignorados:
         print(f"     modo so-arquivos: {ignorados} cena(s) sem arquivo "
               "no banco (ficaram em silencio)")
+    if cortes_sfx:
+        print(f"     whoosh nos cortes internos do Cut Engine: {cortes_sfx}")
     if faltando:
         print("     sem arquivo (baixe gratis e salve em banco_efeitos/): "
               + ", ".join(faltando))
     return final
+
+
+# ================ FASE 10 - Cut Engine ================
+# Decide OS CORTES internos de cada cena no ritmo da narração.
+# Sinais usados: silencio, fim de frase/assunto, palavras de impacto,
+# picos de voz (enfase), movimento da cena, duracao da cena e o perfil.
+
+PALAVRAS_IMPACTO = (
+    "chocou", "chocante", "inacreditavel", "incrivel", "inesperado",
+    "surpreendente", "revelou", "verdade", "segredo", "nunca", "ninguem",
+    "todo mundo", "gritou", "parou", "chorou", "abracou", "morreu",
+    "morte", "dinheiro", "milionario", "assustador", "escapou", "heroi",
+)
+
+# peso de cada sinal na escolha do corte (maior = corta ali)
+PESOS_CORTES = {
+    "normal":       {"pausa": 30, "frase": 26, "virgula": 8,
+                     "impacto": 12, "pico": 8},
+    "rapida":       {"pausa": 30, "frase": 20, "virgula": 9,
+                     "impacto": 34, "pico": 30},
+    "muito_rapida": {"pausa": 26, "frase": 18, "virgula": 12,
+                     "impacto": 24, "pico": 22},
+}
+
+# sequencia de enquadramentos: (aproximacao, direcao do zoom, quer pan)
+# 0 = aberto, 1 = medio, 2 = fechado
+PADRAO_PLANOS = (
+    (0.0, 1, False), (1.0, -1, True), (0.5, 1, True), (2.0, 1, False),
+    (1.0, 1, True), (0.0, -1, False), (1.5, -1, True),
+)
+
+
+def _cut_sfx_ativo():
+    """Fase 10 - whoosh nos cortes internos? (respeita SFX_* e o perfil)"""
+    if not (SFX_LIGADO and CUT_ENGINE and SFX_TRANSICAO):
+        return False
+    if CUT_SFX is True:
+        return True
+    if CUT_SFX is False:
+        return False
+    return PERFIL_CORTES == "muito_rapida"   # "auto"
+
+
+def _texto_da_cena(roteiro, numero):
+    """Texto de narracao da cena (campo `narracao` do roteiro.json)."""
+    if not roteiro or not isinstance(roteiro.get("cenas"), list):
+        return ""
+    for cena in roteiro["cenas"]:
+        if isinstance(cena, dict) and cena.get("numero") == numero:
+            return cena.get("narracao") or ""
+    return ""
+
+
+def _carregar_sinal_mono(caminho):
+    """Decodifica o audio em mono 44100 Hz (numpy puro, via FFmpeg)."""
+    import numpy as np
+    proc = subprocess.run(
+        [achar_ffmpeg(), "-i", str(caminho), "-ac", "1", "-ar", str(FS_SFX),
+         "-f", "f32le", "-"],
+        capture_output=True,
+    )
+    return np.frombuffer(proc.stdout, dtype="float32").astype("float64")
+
+
+def _energia_da_narracao(sinal):
+    """
+    Curva de volume da fala (RMS de 20 em 20 ms, suavizada, 0 a 1).
+    E o 'momento da narração': vales = pausas/termos de frase,
+    picos = voz de enfase (impacto).
+    """
+    import numpy as np
+    if sinal is None or len(sinal) < FS_SFX // 4:
+        return None
+    janela = int(0.02 * FS_SFX)
+    m = len(sinal) // janela
+    if m < 10:
+        return None
+    rms = np.sqrt((
+        sinal[: m * janela].reshape(m, janela).astype("float64") ** 2
+    ).mean(axis=1))
+    if m >= 5:  # suaviza em 0,1s para nao tremer no meio de uma consoante
+        rms = np.convolve(rms, np.ones(5) / 5.0, mode="same")
+    topo = float(np.percentile(rms, 95))
+    if topo <= 1e-6:
+        return None
+    return rms / topo
+
+
+def _pausas_da_narracao(energia):
+    """Intervalos de silencio interno (>= 0,10s): corte ali fica invisivel."""
+    import numpy as np
+    if energia is None:
+        return []
+    limiar = max(0.05, float(np.percentile(energia, 90)) * 0.12)
+    baixo = energia < limiar
+    bordas = np.concatenate(([False], baixo, [False]))
+    d = np.diff(bordas.astype("int8"))
+    inicios = np.flatnonzero(d == 1)
+    fins = np.flatnonzero(d == -1)
+    saida = []
+    for a, b in zip(inicios, fins):
+        if a == 0 or b >= len(energia):   # comeco/fim da cena: nao corta ali
+            continue
+        if (b - a) * 0.02 >= 0.10:
+            saida.append((a * 0.02, b * 0.02))
+    return saida
+
+
+def _frase_tem_impacto(frase):
+    """! ou ? , caixa alta ou palavra de impacto = momento de enfase."""
+    if "!" in frase or "?" in frase:
+        return True
+    for bruto in re.findall(r"\b[A-Za-zÀ-ÿ]{3,}\b", frase):
+        if len(bruto) >= 3 and bruto.isupper():
+            return True
+    limpo = _normalizar_texto(frase)
+    return any(p in limpo for p in PALAVRAS_IMPACTO)
+
+
+def _marcos_do_texto(texto):
+    """
+    Frases e virgulas do texto viram marcadores em fracao da duracao
+    da cena (0 a 1): 'frase' = fim de frase/assunto, 'impacto' =
+    comeco de frase de impacto (o corte ENTRA no impacto), 'virgula' =
+    sub-mudanca dentro da frase.
+    """
+    if not texto or not texto.strip():
+        return []
+    partes = [p for p in re.split(r"(?<=[.!?…])\s+", texto.strip()) if p.strip()]
+    total = max(len(texto), 1)
+    marcos = []
+    pos = 0
+    for p in partes:
+        ini = texto.find(p, pos)
+        if ini < 0:
+            ini = pos
+        fim = min(ini + len(p), total)
+        pos = fim
+        if 0.0 < fim / total < 1.0:
+            marcos.append((fim / total, "frase"))
+        if _frase_tem_impacto(p) and ini / total > 0.02:
+            marcos.append((ini / total, "impacto"))
+        for m in re.finditer(r",\s+", p):
+            fr = (ini + m.end()) / total
+            if 0.0 < fr < 1.0:
+                marcos.append((fr, "virgula"))
+    return marcos
+
+
+def _colar_no_vale(energia, t, janela=0.30):
+    """Aproxima t para o ponto mais calmo da fala em +/- janela (corte disfarcado)."""
+    import numpy as np
+    if energia is None:
+        return t
+    i = int(round(t / 0.02))
+    a = max(0, i - int(janela / 0.02))
+    b = min(len(energia), i + int(janela / 0.02) + 1)
+    if b - a < 2:
+        return t
+    return (a + int(np.argmin(energia[a:b]))) * 0.02
+
+
+def _momentos_de_impacto(energia):
+    """Pontos de voz mais forte: marca o vale logo ANTES do pico."""
+    import numpy as np
+    if energia is None or len(energia) < 20:
+        return []
+    med = float(np.median(energia))
+    if med <= 1e-6:
+        return []
+    saida = []
+    i = 2
+    n = len(energia)
+    while i < n - 2:
+        if (energia[i] >= med * 1.5 and energia[i] >= energia[i - 1]
+                and energia[i] > energia[i + 1]):
+            a = max(0, i - 25)          # 0,5s para tras
+            j = a + int(np.argmin(energia[a:i + 1]))
+            saida.append(j * 0.02)
+            i += 15                      # nao conta o mesmo pico de novo
+        else:
+            i += 1
+    return saida
+
+
+def _movimento_da_cena(clip, t, dur):
+    """Quanto a cena se mexe perto de t (0 = parado, 1 = acao forte)."""
+    import numpy as np
+    if clip is None or not dur or dur <= 0.3:
+        return 0.0
+    if clip.__class__.__name__ == "ImageClip":
+        return 0.0                       # imagem fixa nao tem movimento
+    cache = getattr(clip, "_cut_mov_cache", None)
+    if cache is None:
+        cache = {}
+        try:
+            clip._cut_mov_cache = cache
+        except Exception:
+            pass
+    chave = round(float(t) / 0.4)
+    if chave in cache:
+        return cache[chave]
+    mov = 0.0
+    try:
+        ts = [max(0.0, t - 0.12),
+              min(max(t, 0.0), max(dur - 0.02, 0.0)),
+              min(max(dur - 0.01, 0.0), t + 0.12)]
+        quadros = [clip.get_frame(x) for x in ts]
+        for a, b in zip(quadros, quadros[1:]):
+            if a.shape != b.shape:
+                continue
+            ga = a[..., :3].astype("float32").mean(axis=2)[::4, ::4]
+            gb = b[..., :3].astype("float32").mean(axis=2)[::4, ::4]
+            mov = max(mov, float(np.abs(gb - ga).mean()) / 255.0)
+        mov = min(1.0, mov * 15.0)
+    except Exception:
+        mov = 0.0
+    cache[chave] = mov
+    return mov
+
+
+def calcular_cortes(dur, energia, texto, perfil, clip=None):
+    """
+    Cut Engine: devolve os cortes da cena (tempo local, em segundos).
+    Cada item = {"t": segundo, "impacto": True/False}.
+    Respeita a janela min..max do perfil e a margem da cena.
+    """
+    import numpy as np
+    cfg = PERFIS_CORTES.get(perfil) or PERFIS_CORTES["rapida"]
+    pesos = PESOS_CORTES.get(perfil) or PESOS_CORTES["rapida"]
+    dur = float(dur or 0.0)
+    if dur <= 0.0:
+        return []
+    margem = min(CUT_MARGEM_CENA, dur * 0.2)
+
+    candidatos = []
+
+    # 1) silencio da narracao = melhor lugar para cortar
+    for a, b in _pausas_da_narracao(energia):
+        candidatos.append({"t": (a + b) / 2.0, "peso": pesos["pausa"],
+                           "impacto": False})
+
+    # 2) fim de frase/assunto + comeco de frase de impacto
+    for frac, tipo in _marcos_do_texto(texto):
+        t = _colar_no_vale(energia, frac * dur, 0.30)
+        candidatos.append({"t": t, "peso": pesos[tipo],
+                           "impacto": tipo == "impacto"})
+
+    # 3) picos de voz (enfase da narração = momento de impacto)
+    for t in _momentos_de_impacto(energia):
+        candidatos.append({"t": t, "peso": pesos["pico"], "impacto": True})
+
+    candidatos = [c for c in candidatos if 0.0 <= c["t"] <= dur]
+
+    # 4) movimento da cena: acao forte no instante do corte = penalidade
+    if clip is not None:
+        for c in candidatos:
+            mov = _movimento_da_cena(clip, c["t"], dur)
+            if mov > 0.35:
+                c["peso"] *= (1.0 - 0.6 * mov)
+
+    # candidatos muito proximos (0,15s): fica so o de maior peso
+    candidatos.sort(key=lambda c: (-c["peso"], c["t"]))
+    limpos = []
+    for c in candidatos:
+        if all(abs(c["t"] - o["t"]) >= 0.15 for o in limpos):
+            limpos.append(c)
+    candidatos = sorted(limpos, key=lambda c: c["t"])
+
+    # 5) janela do perfil: anda do inicio ao fim cortando dentro de min..max
+    cortes = []
+    t = margem
+    while True:
+        lo = t + cfg["min"]
+        hi = min(t + cfg["max"], dur - cfg["min"])
+        if lo > hi:
+            break
+        na_janela = [c for c in candidatos if lo - 1e-6 <= c["t"] <= hi + 1e-6]
+        if na_janela:
+            meio = t + (cfg["min"] + cfg["max"]) / 2.0
+            melhor = max(na_janela,
+                         key=lambda c: (c["peso"], -abs(c["t"] - meio)))
+            alvo, impacto = melhor["t"], bool(melhor["impacto"])
+        elif energia is not None:
+            # nenhum sinal: corta no ponto mais calmo da janela
+            i0 = min(int(lo / 0.02), len(energia) - 1)
+            i1 = min(max(int(hi / 0.02), i0 + 1), len(energia))
+            alvo = min(max((i0 + int(np.argmin(energia[i0:i1]))) * 0.02, lo), hi)
+            impacto = False
+        else:
+            alvo = (lo + hi) / 2.0
+            impacto = False
+        alvo = min(max(alvo, lo), hi)
+        cortes.append({"t": round(float(alvo), 3), "impacto": impacto})
+        t = alvo
+    return cortes
+
+
+def montar_planos(dur, cortes, perfil, numero):
+    """
+    Cut Engine: cria o plano visual de cada pedaco entre cortes
+    (aproximacao do zoom, direcao e enquadramento/pan). A troca brusca
+    de plano no limite do corte e o que se ve como CORTE na tela.
+    """
+    cfg = PERFIS_CORTES.get(perfil) or PERFIS_CORTES["rapida"]
+    limites = [0.0] + [float(c["t"]) for c in cortes] + [float(dur)]
+    planos = []
+    passo = cfg["forca"] * 0.6
+    for i in range(len(limites) - 1):
+        ini, fim = limites[i], limites[i + 1]
+        if fim - ini <= 0.03:
+            continue
+        nivel, direcao, quer_pan = PADRAO_PLANOS[
+            (i + numero) % len(PADRAO_PLANOS)
+        ]
+        impacto = bool(cortes[i - 1]["impacto"]) if i >= 1 else False
+        base = max(ESCALA_ZOOM, 1.02)
+        escala = base + cfg["forca"] * (nivel / 2.0)
+        cx_ini = cy_ini = 0.0
+        if quer_pan and cfg["pan"] > 0:
+            p = cfg["pan"]
+            folga = 1.0 / max(1e-6, 1.0 - p / 0.45)  # escala que comporta o pan
+            escala = max(escala, folga + passo)
+            p = min(p, 0.45 * (1.0 - 1.0 / max(escala - passo, 1.01)))
+            dxs, dys = ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0))[
+                (i + numero) % 4
+            ]
+            cx_ini, cy_ini = dxs * p, dys * p
+        if impacto:
+            # punch de impacto POR CIMA de tudo (nunca engolido pelo pan)
+            escala += cfg["impacto"]
+        if direcao > 0:
+            e_ini = max(1.02, escala - passo)
+            e_fim = escala
+        else:
+            e_ini = escala
+            e_fim = max(1.02, escala - passo)
+        planos.append({
+            "ini": ini, "fim": fim,
+            "e_ini": float(e_ini), "e_fim": float(e_fim),
+            "cx_ini": float(cx_ini), "cy_ini": float(cy_ini),
+            "cx_fim": 0.0, "cy_fim": 0.0,
+            "espelhar": bool((i + numero) % 2 == 1),
+        })
+
+    # garante CORTE visivel: o plano novo nunca nasce na mesma escala em
+    # que o anterior terminou (salto minimo do perfil - so empurra para
+    # CIMA: escala maior = mais folga, o pan nunca perde a borda)
+    salto_min = cfg["salto"]
+    for i in range(1, len(planos)):
+        ant, atu = planos[i - 1], planos[i]
+        d = atu["e_ini"] - ant["e_fim"]
+        if abs(d) >= salto_min:
+            continue
+        ajuste = (ant["e_fim"] + salto_min) - atu["e_ini"]
+        atu["e_ini"] += ajuste
+        atu["e_fim"] += ajuste
+    return planos
+
+
+def _fn_planos(planos):
+    """Funcao de quadro do Cut Engine: (escala, dx, dy, espelhar) no instante t."""
+    import bisect
+    inicios = [p["ini"] for p in planos]
+
+    def plano_em(t):
+        i = bisect.bisect_right(inicios, t) - 1
+        if i < 0:
+            i = 0
+        elif i >= len(planos):
+            i = len(planos) - 1
+        p = planos[i]
+        dur = p["fim"] - p["ini"]
+        frac = (t - p["ini"]) / dur if dur > 0 else 0.0
+        frac = min(max(frac, 0.0), 1.0)
+        escala = p["e_ini"] + (p["e_fim"] - p["e_ini"]) * frac
+        dx = p["cx_ini"] + (p["cx_fim"] - p["cx_ini"]) * frac
+        dy = p["cy_ini"] + (p["cy_fim"] - p["cy_ini"]) * frac
+        return (escala, dx, dy, p["espelhar"])
+
+    return plano_em
 
 
 def principal():
@@ -823,6 +1285,7 @@ def principal():
     clips = []
     audios = []
     com_narracao = 0
+    resumo_cortes = []   # Fase 10: (numero, n_cortes) de cada cena
     cenas_info = []      # Fase 8: inicio/duracao/sugestao de cada cena
     inicio_cena = 0.0
     try:
@@ -848,27 +1311,76 @@ def principal():
             else:
                 print(f" ok ({clip.duration:.1f}s)")
 
+            # Fase 10 - Cut Engine: decide os cortes no ritmo da narração
+            planos = None
+            cortes_cena = []
+            if CUT_ENGINE and ZOOM_DINAMICO and PERFIL_CORTES in PERFIS_CORTES:
+                energia = None
+                if narracao:
+                    energia = _energia_da_narracao(
+                        _carregar_sinal_mono(narracao)
+                    )
+                texto_cena = _texto_da_cena(roteiro, ordem)
+                cortes_cena = calcular_cortes(
+                    clip.duration or 0.0, energia, texto_cena,
+                    PERFIL_CORTES, clip=clip,
+                )
+                if cortes_cena:
+                    planos = montar_planos(
+                        clip.duration, cortes_cena, PERFIL_CORTES, ordem
+                    )
+
             # Fase 9 - cor, nitidez, zoom Ken Burns e fades
             clip = tratar_imagem(
                 clip, ordem,
                 primeira=(indice == 0),
                 ultima=(indice == len(cenas) - 1),
+                planos=planos,
             )
             if audio is not None and clip.audio is None:
                 clip = clip.with_audio(audio)  # salvaguarda: efeitos nunca perdem a voz
 
             clips.append(clip)
+            resumo_cortes.append((ordem, len(cortes_cena)))
             cenas_info.append({
                 "numero": ordem,
                 "inicio": inicio_cena,
                 "duracao": clip.duration or 0.0,
                 "sugerido": _sugestao_do_roteiro(roteiro, ordem),
+                "cortes": [c["t"] for c in cortes_cena],
             })
             inicio_cena += clip.duration or 0.0
 
         print(f"[OK] Narração em {com_narracao}/{len(cenas)} cena(s)")
         if com_narracao < len(cenas):
             print("     (cenas sem audio ficam em silencio - rode gerar_narracao.py para todas)")
+
+        # Fase 10 - resumo do Cut Engine
+        if CUT_ENGINE:
+            if PERFIL_CORTES not in PERFIS_CORTES:
+                print(f"[!] PERFIL_CORTES invalido: {PERFIL_CORTES!r} "
+                      f"(use: {', '.join(PERFIS_CORTES)}) - sem cortes")
+            elif not ZOOM_DINAMICO:
+                print("[cut] Cut Engine parado: ZOOM_DINAMICO = False")
+            else:
+                cfg_p = PERFIS_CORTES[PERFIL_CORTES]
+                total_cortes = sum(n for _, n in resumo_cortes)
+                detalhe = " | ".join(
+                    f"cena {n}: {k}" for n, k in resumo_cortes
+                )
+                print(f"[cut] Perfil {PERFIL_CORTES} "
+                      f"({cfg_p['min']:g}-{cfg_p['max']:g}s por plano): "
+                      f"{detalhe} -> {total_cortes} corte(s) interno(s)")
+                instantes = sorted(
+                    info["inicio"] + t
+                    for info in cenas_info
+                    for t in info.get("cortes", [])
+                )
+                if instantes:
+                    print("[cut] instantes globais (s): "
+                          + ", ".join(f"{x:.2f}" for x in instantes))
+        else:
+            print("[cut] Cut Engine desligado (CUT_ENGINE = False)")
 
         # 5. Junta tudo (cenas com audio + cenas sem = CompositeAudioClip, sem erro)
         print("[...] Juntando as cenas...")
