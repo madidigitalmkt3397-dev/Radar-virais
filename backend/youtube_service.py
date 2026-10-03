@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -22,10 +23,12 @@ API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 # ---------------------------------------------------------------------------
 # Busca de transcricao - cadeia de fontes gratuitas (sem chave propria):
-#   1) API interna Innertube (cliente ANDROID) - contorna o captcha do site;
-#   2) instancias Piped - rede de seguranca.
-# O YouTube bloqueia IPs de nuvem na pagina web (429/captcha), mas a API
-# interna com cliente de celular continua respondendo.
+#   1) youtube-transcript.ai - a busca acontece NO SERVIDOR deles, entao
+#      nao depende do IP do Render (hoje, unico caminho que atravessa o
+#      bloqueio do YouTube contra IP de nuvem);
+#   2) API interna Innertube (cliente ANDROID) - contorna o captcha do site;
+#   3) youtube-transcript-green (vercel) - cache parcial, reserva;
+#   4) instancias Piped - rede de seguranca.
 # ---------------------------------------------------------------------------
 PIPED_INSTANCIAS = [
     "https://api.piped.private.coffee",
@@ -401,12 +404,97 @@ def _transcript_piped(base: str, video_id: str, timeout: int = 6) -> str:
     return texto
 
 
+def _texto_do_markdown_ia(corpo: str) -> str:
+    """Texto puro do markdown do youtube-transcript.ai: cabecalho
+    `# Transcript:` + secao `## Transcript` com marcas `[m:ss]` por linha."""
+    if "## Transcript" in corpo:
+        corpo = corpo.split("## Transcript", 1)[1]
+    linhas = []
+    for bruto in corpo.splitlines():
+        ln = bruto.strip()
+        if not ln or ln.startswith("#"):
+            continue
+        ln = re.sub(r"^\[[\d:]+\]\s*", "", ln)     # marca de tempo
+        linhas.append(ln)
+    return re.sub(r"\s+", " ", " ".join(linhas)).strip()
+
+
+def _transcript_ia(video_id: str, timeout: int = 6) -> str:
+    """Transcricao via youtube-transcript.ai (gratis, sem chave e sem cadastro).
+
+    GET https://youtube-transcript.ai/transcript/{ID}.txt - a fonte busca a
+    legenda no servidor DELA, por isso funciona mesmo com o YouTube
+    bloqueando o IP de nuvem do Render. Comportamento medido em teste:
+      - User-Agent padrao do urllib leva 403: usa o UA de navegador;
+      - 200 + `# Transcript:` = transcript real (~0,5 s, ~4 KB);
+      - `# No captions available` = o video nao tem legenda (devolve '');
+      - 429 ou corpo ~240 B com "high volume" = rate limit deles (janela de
+        ~15-20 min): LANCA erro para a cadeia tentar a proxima fonte.
+    """
+    corpo = _http_get(
+        f"https://youtube-transcript.ai/transcript/{video_id}.txt",
+        timeout=timeout,
+    )
+    c = corpo.lower()
+    if "high volume" in c or "rate limited" in c:
+        raise ValueError("rate limit do youtube-transcript.ai (~15-20 min)")
+    if "# no captions available" in c:
+        return ""            # fonte viva respondeu: o video nao tem legenda
+    if "# transcript:" in c and "## transcript" in c:
+        texto = _texto_do_markdown_ia(corpo)
+        if texto:
+            return texto
+        raise ValueError("youtube-transcript.ai: texto vazio")
+    raise ValueError(
+        f"youtube-transcript.ai: formato inesperado ({len(corpo)} bytes)")
+
+
+def _transcript_green(video_id: str, timeout: int = 8) -> str:
+    """Reserva: youtube-transcript-green.vercel.app (JSON com timestamps).
+
+    POST /api/transcript {"videoUrl": ..., "format": "json"} - gratis e sem
+    chave, mas so responde para videos que ja passaram por la (cache deles).
+    A ausencia de resposta ("No transcript available") NAO prova que o
+    video nao tem legenda, entao aqui erro vira excecao (fonte falhou) e
+    nunca "sem legenda".
+    """
+    url = "https://youtube-transcript-green.vercel.app/api/transcript"
+    try:
+        dados = _http_post_json(
+            url,
+            {"videoUrl": f"https://www.youtube.com/watch?v={video_id}",
+             "format": "json"},
+            timeout=timeout,
+        )
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(
+                e.read().decode("utf-8", "replace")).get("error", "")
+        except Exception:
+            msg = ""
+        raise ValueError(f"green: {msg[:70] or e}") from None
+    bruto = dados.get("raw") or []
+    if not bruto and isinstance(dados.get("data"), str):
+        try:
+            bruto = json.loads(dados["data"])
+        except Exception:
+            bruto = []
+    partes = [str(s.get("text", "")).strip()
+              for s in bruto if isinstance(s, dict)]
+    texto = re.sub(r"\s+", " ", " ".join(p for p in partes if p)).strip()
+    if texto:
+        return texto
+    raise ValueError(f"green: {str(dados.get('error') or 'sem texto')[:70]}")
+
+
 def get_video_transcript(video_id: str, relatorio: list = None) -> str:
     """Busca a transcricao do video (pt-BR > pt > en).
 
     Cadeia de fontes (todas gratuitas, sem chave propria):
-    1) API interna Innertube (variantes android/ios atuais) - nao cai no captcha;
-    2) instancias Piped - 1 rodada, rede de seguranca.
+    1) youtube-transcript.ai - busca no servidor deles (independe do IP);
+    2) API interna Innertube (variantes android/ios atuais) - nao cai no captcha;
+    3) youtube-transcript-green - cache parcial, reserva;
+    4) instancias Piped - 1 rodada, rede de seguranca.
     Toda a cadeia tem orcamento de ORCAMENTO_TRANSCRICAO segundos; se tudo
     falhar, levanta ValueError com o motivo (fonte + status + ms) + dica
     do modo manual. `relatorio` (se informado) recebe cada tentativa.
@@ -419,16 +507,56 @@ def get_video_transcript(video_id: str, relatorio: list = None) -> str:
         relatorio = []       # fonte/status/ms/chars de cada tentativa
     sem_legenda = False
 
-    # 1) API interna Innertube (host da API do Google, depois youtube.com)
+    # 1) youtube-transcript.ai - server-side (~0,5s), nao depende do IP
+    t0 = time.monotonic()
     try:
-        texto = _transcript_innertube(video_id, relatorio=relatorio)
+        texto = _transcript_ia(video_id)
+        relatorio.append({"fonte": "transcript.ai",
+                          "status": "ok" if texto else "ok, sem legenda",
+                          "ms": int((time.monotonic() - t0) * 1000),
+                          "chars": len(texto)})
         if texto:
             return texto
         sem_legenda = True   # fonte viva respondeu: o video nao tem legenda
-    except Exception:
-        pass   # cada tentativa ja entrou em `relatorio` com status e ms
+    except Exception as e:
+        relatorio.append({"fonte": "transcript.ai",
+                          "status": f"{type(e).__name__}: {str(e)[:70]}",
+                          "ms": int((time.monotonic() - t0) * 1000),
+                          "chars": 0})
 
-    # 2) instancias Piped - so enquanto houver orcamento de tempo
+    # 2) API interna Innertube (host da API do Google, depois youtube.com)
+    if not sem_legenda:
+        try:
+            texto = _transcript_innertube(video_id, relatorio=relatorio)
+            if texto:
+                return texto
+            sem_legenda = True   # fonte viva respondeu: o video nao tem legenda
+        except Exception:
+            pass   # cada tentativa ja entrou em `relatorio` com status e ms
+
+    # 3) youtube-transcript-green - so enquanto houver orcamento
+    if not sem_legenda:
+        if time.monotonic() - t_ini > ORCAMENTO_TRANSCRICAO:
+            relatorio.append({"fonte": "transcript-green",
+                              "status": "pulado (orcamento)",
+                              "ms": 0, "chars": 0})
+        else:
+            t0 = time.monotonic()
+            try:
+                texto = _transcript_green(video_id)
+                relatorio.append({"fonte": "transcript-green",
+                                  "status": "ok",
+                                  "ms": int((time.monotonic() - t0) * 1000),
+                                  "chars": len(texto)})
+                if texto:
+                    return texto
+            except Exception as e:
+                relatorio.append(
+                    {"fonte": "transcript-green",
+                     "status": f"{type(e).__name__}: {str(e)[:70]}",
+                     "ms": int((time.monotonic() - t0) * 1000), "chars": 0})
+
+    # 4) instancias Piped - so enquanto houver orcamento de tempo
     for base in PIPED_INSTANCIAS:
         if sem_legenda:
             break
