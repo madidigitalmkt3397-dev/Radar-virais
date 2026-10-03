@@ -122,7 +122,7 @@ INVERTER_CORES = False    # inverte as cores (efeito psicodelico)
 
 # ---------- FASE 10 - Cut Engine (cortes no ritmo da narração) ----------
 CUT_ENGINE = True           # liga/desliga o motor de cortes internos
-PERFIL_CORTES = "muito_rapida"    # ritmo alternado de duracao de cada plano:
+PERFIL_CORTES = "rapida"          # ritmo alternado de duracao de cada plano:
                             # "normal" (5-7-7-5s) | "rapida" (3-5-5-3s) |
                             # "muito_rapida" (0,9-1,8-1,8-0,9s)
 CUT_SFX = False             # whoosh nos cortes internos (zoom de cada corte):
