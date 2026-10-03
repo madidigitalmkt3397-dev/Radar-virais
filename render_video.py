@@ -125,9 +125,9 @@ CUT_ENGINE = True           # liga/desliga o motor de cortes internos
 PERFIL_CORTES = "muito_rapida"    # ritmo alternado de duracao de cada plano:
                             # "normal" (5-7-7-5s) | "rapida" (3-5-5-3s) |
                             # "muito_rapida" (0,9-1,8-1,8-0,9s)
-CUT_SFX = "auto"            # whoosh nos cortes internos:
-                            # "auto" = so no perfil muito_rapida |
-                            # True = em todos | False = nunca
+CUT_SFX = False             # whoosh nos cortes internos (zoom de cada corte):
+                            # False = NUNCA - whoosh so nas MUDANCAS de cena |
+                            # "auto" = so no perfil muito_rapida | True = todos
 CUT_SFX_VOLUME = 0.25       # volume do whoosh dos cortes internos
                              # (muito_rapida = MUITOS cortes: cada whoosh
                              #  fica sutil para a soma nao abafar a voz)
@@ -853,6 +853,22 @@ def _achar_sfx(termo_norm, exceto=()):
     return None
 
 
+def _achar_sfx_da_cena(numero):
+    """Efeito MANUAL da cena: arquivo em banco_efeitos/ com prefixo
+    `cena<numero>_` (ex.: cena3_explosao.mp3). Baixe o som que quiser,
+    renomeie com o numero da cena e ele toca nela - tem prioridade sobre
+    a sugestao do roteiro e nao precisa casar nome."""
+    if not PASTA_SFX.exists():
+        return None
+    alvo = f"cena{int(numero)}"
+    padrao = re.compile(rf"^{alvo}[_-]", re.IGNORECASE)
+    for a in sorted(PASTA_SFX.iterdir()):
+        if a.suffix.lower() in EXTENSOES_SFX and (
+                a.stem.lower() == alvo or padrao.match(a.stem)):
+            return a
+    return None
+
+
 def _achar_transicao():
     """swoosh.wav / transicao.wav no banco_efeitos/ (opcional)."""
     if not PASTA_SFX.exists():
@@ -907,6 +923,8 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
       - whoosh na virada de cada cena (automatico, comeca antes do corte)
       - efeito_sonoro_sugerido de cada cena (arquivo do banco_efeitos/
         ou sintetizado na hora)
+      - efeito MANUAL cenaN_*.ext no banco_efeitos/ (prioridade maxima,
+        nao precisa casar com a sugestao do roteiro)
       - SFX_SO_ARQUIVOS = True: so toca arquivo do banco (sem sintetizar)
     `audios` recebe os arquivos abertos (o finally do principal fecha).
     """
@@ -919,6 +937,7 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
     faltando = []
     ignorados = 0
     cortes_sfx = 0
+    manuais = []
 
     for i, info in enumerate(cenas_info):
         inicio = float(info["inicio"])
@@ -928,25 +947,35 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
         e_whoosh = tipo == "whoosh" or "whoosh" in sugerido_norm \
             or "swoosh" in sugerido_norm
 
-        # --- 1) efeito sugerido no roteiro ---
+        # --- 1) efeito da cena: MANUAL (cenaN_*.ext) > sugestao do roteiro ---
         clip_efeito = None
         efeito_colocado = False
-        if SFX_POR_CENA and sugerido_norm:
-            arquivo = _achar_sfx(sugerido_norm, exceto=SFX_TRANSICAO_NOMES)
+        if SFX_POR_CENA:
+            arquivo = _achar_sfx_da_cena(info["numero"])
+            if arquivo is not None:
+                manuais.append((info["numero"], arquivo.name))
+                nome_arq = _normalizar_texto(arquivo.stem)
+                if "whoosh" in nome_arq or "swoosh" in nome_arq:
+                    e_whoosh = True   # manual whoosh vale como transicao
+            elif sugerido_norm:
+                arquivo = _achar_sfx(
+                    sugerido_norm, exceto=SFX_TRANSICAO_NOMES
+                )
             if arquivo is not None:
                 clip_efeito = _criar_clip_sfx(caminho=arquivo)
                 if clip_efeito is not None:
                     audios.append(clip_efeito)
                     do_banco += 1
-            elif SFX_SO_ARQUIVOS:
-                ignorados += 1       # so-arquivos: sem arquivo = silencio
-            elif tipo is not None:
-                clip_efeito = _criar_clip_sfx(
-                    tipo=tipo, duracao_cena=dur_cena
-                )
-                sintetizados += 1
-            else:
-                faltando.append(str(info["sugerido"]).strip())
+            elif sugerido_norm:
+                if SFX_SO_ARQUIVOS:
+                    ignorados += 1     # so-arquivos: sem arquivo = silencio
+                elif tipo is not None:
+                    clip_efeito = _criar_clip_sfx(
+                        tipo=tipo, duracao_cena=dur_cena
+                    )
+                    sintetizados += 1
+                else:
+                    faltando.append(str(info["sugerido"]).strip())
             if clip_efeito is not None:
                 onde = inicio
                 if e_whoosh and i > 0:
@@ -1018,6 +1047,9 @@ def juntar_efeitos_sonicos(final, cenas_info, audios):
     final = final.with_audio(mistura)
     print(f"[OK] Efeitos sonoros: {sintetizados} sintetizado(s) "
           f"+ {do_banco} do banco_efeitos/")
+    if manuais:
+        print("     efeitos MANUAIS (banco_efeitos/cenaN_*): "
+              + ", ".join(f"cena {n} = {nome}" for n, nome in manuais))
     if ignorados:
         print(f"     modo so-arquivos: {ignorados} cena(s) sem arquivo "
               "no banco (ficaram em silencio)")

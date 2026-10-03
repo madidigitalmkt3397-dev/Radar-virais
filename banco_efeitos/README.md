@@ -18,6 +18,10 @@ Com `SFX_SO_ARQUIVOS = False`, quem não achar arquivo o render
 
 - Salve com o mesmo nome da sugestão, em minúsculas:
   `aplausos.mp3`, `risada.wav`, `suspense.mp3`
+- **Efeito manual por cena**: `cena3_explosao.mp3` (prefixo
+  `cena<numero>_<qualquer nome>`) toca **sempre** na cena 3, com
+  prioridade sobre a sugestão do roteiro e sem precisar casar nome.
+  Arquivo sem prefixo e sem `cenaN_` = `cena3.mp3` também vale
 - Extensões aceitas: `.mp3` `.wav` `.ogg` `.m4a` `.aac` `.flac`
 - `swoosh.wav` ou `transicao.wav`: é o som das **trocas de cena** (no
   modo automático ele substitui o whoosh gerado)
@@ -37,4 +41,6 @@ Depois de baixar: salve aqui e rode `python render_video.py` de novo.
   pasta (nunca sintetiza; sem arquivo = silêncio). `False` = modo automático
 - `SFX_TRANSICAO` — whoosh nas trocas
 - `SFX_POR_CENA` — efeito sugerido no roteiro
+- `CUT_SFX` — whoosh nos cortes internos do Cut Engine (padrão `False` =
+  whoosh **só** nas mudanças de cena; `"auto"` = só no perfil muito_rapida)
 - `SFX_VOLUME` / `SFX_VOLUME_TRANSICAO` — volume (0.0 a 1.0)
