@@ -167,11 +167,18 @@ def search_viral_videos(query: str, max_results: int = 5, period: str = "all"):
                 "engagement_rate": engagement_rate
             })
 
+        # videos().list devolve fora da ordem da busca (embaralhado):
+        # reordena pelos melhores numeros - views primeiro, engajamento
+        # como desempate - para o site listar o que esta viralizando antes
+        videos.sort(key=lambda v: (v["views"], v["engagement_rate"]),
+                    reverse=True)
         return videos
 
     except Exception as e:
         print(f"Erro na API do YouTube: {str(e)}")
-        return []
+        # nao volta [] silencioso: o site precisa mostrar o motivo
+        # (cota esgotada, chave invalida...) em vez de lista vazia
+        raise ValueError(f"Busca no YouTube falhou: {str(e)[:200]}") from e
 
 
 def _http_get(url: str, timeout: int = 12) -> str:

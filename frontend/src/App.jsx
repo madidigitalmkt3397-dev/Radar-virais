@@ -135,7 +135,10 @@ function App() {
       setVideos(response.data.videos || []);
     } catch (err) {
       console.error(err);
-      setErro('Erro ao buscar vídeos. Verifique se o backend está rodando.');
+      setErro(
+        err.response?.data?.detail ||
+        'Erro ao buscar vídeos. Verifique se o backend está rodando.'
+      );
     } finally {
       setLoading(false);
     }
@@ -228,6 +231,21 @@ function App() {
   };
 
   const formatarNumero = (n) => (typeof n === 'number' ? n.toLocaleString('pt-BR') : '—');
+
+  // tempo relativo + data/hora local: prova visual de que o filtro de
+  // periodo valeu (a data pura escondia a hora e o fuso UTC fazia um
+  // video das 00h aparecer como "ontem")
+  const tempoRelativo = (dataISO) => {
+    if (!dataISO) return '—';
+    const diff = Date.now() - new Date(dataISO).getTime();
+    const min = Math.max(1, Math.floor(diff / 60000));
+    if (min < 60) return `há ${min} min`;
+    const horas = Math.floor(min / 60);
+    if (horas < 24) return `há ${horas}h`;
+    const dias = Math.floor(horas / 24);
+    if (dias <= 30) return `há ${dias} dia${dias > 1 ? 's' : ''}`;
+    return new Date(dataISO).toLocaleDateString('pt-BR');
+  };
 
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif', maxWidth: '1100px', margin: '0 auto', background: '#f4f6f9', minHeight: '100vh' }}>
@@ -396,7 +414,7 @@ function App() {
               <div style={{ flex: 1 }}>
                 <h3 style={{ margin: '0 0 8px 0', color: '#1f2328' }}>{video.title}</h3>
                 <p style={{ margin: '0 0 10px 0', color: '#57606a', fontSize: '14px' }}>
-                  <strong>Canal:</strong> {video.channelTitle} | <strong>Publicado em:</strong> {video.publishedAt ? new Date(video.publishedAt).toLocaleDateString('pt-BR') : '—'}
+                  <strong>Canal:</strong> {video.channelTitle} | <strong>Publicado:</strong> {video.publishedAt ? `${tempoRelativo(video.publishedAt)} (${new Date(video.publishedAt).toLocaleString('pt-BR')})` : '—'}
                 </p>
 
                 <div style={{ display: 'flex', gap: '15px', background: '#f6f8fa', padding: '10px', borderRadius: '6px', marginBottom: '10px', fontSize: '13px', flexWrap: 'wrap' }}>
