@@ -46,8 +46,10 @@ TENTATIVAS = 3
 
 # ---------- FASE 7 - Tratamento de voz (edite para ligar/desligar) ----------
 CORRIGIR_SILENCIO = True   # True = corta pausas mortas (jump cuts)
-SILENCIO_MAX = 0.40        # pausa MAIOR que isso (s) encolhe para SILENCIO_QUIZ
-SILENCIO_QUIZ = 0.15       # quanto da pausa morta e mantido (s)
+SILENCIO_MAX = 0.18        # pausa MAIOR que isso (s) encolhe para SILENCIO_QUIZ
+                           # (0,40 deixava pausas de 0,2-0,3s deitadas no
+                           #  audio - estilo TikTok exige fala encostada)
+SILENCIO_QUIZ = 0.08       # quanto da pausa morta e mantido (s)
 LIMIAR_SILENCIO = 0.01     # volume abaixo disso conta como silencio (0.0 a 1.0)
 
 VELOCIDADE = 1.1           # 1.0 = normal | 1.1 = voz 10% mais rapida (tom igual)

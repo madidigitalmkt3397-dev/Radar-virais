@@ -23,7 +23,7 @@
      whoosh/suspense/heartbeat/ding/impacto na hora (tudo gratis)
     - Fase 10: Cut Engine - cortes internos em ritmo ALTERNADO
       (chave PERFIL_CORTES: "normal" 5-7-7-5s | "rapida" 3-5-5-3s |
-      "muito_rapida" 0,9-1,8-1,8-0,9s - padrao: rapida)
+      "muito_rapida" 0,9-1,8-1,8-0,9s - padrao: muito_rapida)
 
  Para ligar/desligar: chaves SFX_* no topo do script.
  Efeitos com arquivo (risadas, aplausos...): baixe gratis, salve em
@@ -48,12 +48,24 @@ BASE = Path(__file__).resolve().parent
 PASTA_CENAS = BASE / "cenas"
 PASTA_AUDIO = BASE / "audio"
 PASTA_SAIDA = BASE / "output"
-# Normaliza o tamanho das cenas antes de juntar: a PRIMEIRA cena define a
-# tela final e as demais sao ajustadas (escala + corte central, sem borda
-# preta). Sem isto, o compose do MoviePy usa a maior largura x a maior
-# altura entre TODAS as cenas - cenas de resolucoes diferentes viram um
-# video com moldura preta (ou quadrado, se alguma cena for 16:9).
+# Normaliza o tamanho das cenas antes de juntar: a tela final segue
+# FORMATO_ALVO e as demais cenas sao ajustadas (escala + corte central,
+# sem borda preta). Sem isto, o compose do MoviePy usa a maior largura x
+# a maior altura entre TODAS as cenas - cenas de resolucoes diferentes
+# viram um video com moldura preta (ou quadrado, se alguma cena for 1:1).
 AJUSTAR_TAMANHO = True
+# Formato da tela final: "9:16" (Shorts/TikTok/Reels) | "16:9" | "1:1"
+# | "auto" (a PRIMEIRA cena define a tela - comportamento antigo).
+# Com cenas MISTURADAS (1:1 + 16:9 + 9:16), o "auto" seguia a cena 1 e
+# o video final saia fora do padrao - por isso o padrao e "9:16".
+FORMATO_ALVO = "9:16"
+# Tela final nunca menor que a resolucao minima do formato escolhido
+# (cenas menores sobem para ela; cenas maiores preservam a nativa).
+RESOLUCAO_MINIMA = {
+    "9:16": (720, 1280),
+    "16:9": (1280, 720),
+    "1:1": (720, 720),
+}
 ARQUIVO_ROTEIRO = BASE / "roteiro.json"
 PASTA_SFX = BASE / "banco_efeitos"
 
@@ -81,8 +93,12 @@ SFX_SO_ARQUIVOS = True       # True = SO toca arquivo de banco_efeitos/
                              # (nunca sintetiza; sem arquivo = silencio)
 SFX_TRANSICAO = True         # whoosh automatico na virada de cada cena
 SFX_POR_CENA = True          # usa o efeito_sonoro_sugerido do roteiro
-SFX_VOLUME = 0.6             # volume dos efeitos (0.0 a 1.0)
-SFX_VOLUME_TRANSICAO = 0.5   # volume do whoosh das trocas
+# Volume relativo a VOZ: a narracao fica em ~0,55 de pico e os efeitos em
+# cima dela sao densos (chiado/impacto pesa mais que fala no mesmo nivel),
+# entao entram bem abaixo - se a narracao parecer baixa, suba a VOZ, nao
+# estes valores.
+SFX_VOLUME = 0.4             # volume dos efeitos (0.0 a 1.0)
+SFX_VOLUME_TRANSICAO = 0.35  # volume do whoosh das trocas
 
 # ---------- FASE 9 - Imagem viva (edite para ligar/desligar) ----------
 ZOOM_DINAMICO = True      # Ken Burns: zoom sutil em cada cena
@@ -106,13 +122,15 @@ INVERTER_CORES = False    # inverte as cores (efeito psicodelico)
 
 # ---------- FASE 10 - Cut Engine (cortes no ritmo da narração) ----------
 CUT_ENGINE = True           # liga/desliga o motor de cortes internos
-PERFIL_CORTES = "rapida"    # ritmo alternado de duracao de cada plano:
+PERFIL_CORTES = "muito_rapida"    # ritmo alternado de duracao de cada plano:
                             # "normal" (5-7-7-5s) | "rapida" (3-5-5-3s) |
                             # "muito_rapida" (0,9-1,8-1,8-0,9s)
 CUT_SFX = "auto"            # whoosh nos cortes internos:
                             # "auto" = so no perfil muito_rapida |
                             # True = em todos | False = nunca
-CUT_SFX_VOLUME = 0.3        # volume do whoosh dos cortes internos
+CUT_SFX_VOLUME = 0.25       # volume do whoosh dos cortes internos
+                             # (muito_rapida = MUITOS cortes: cada whoosh
+                             #  fica sutil para a soma nao abafar a voz)
 CUT_MARGEM_CENA = 0.45      # nao corta nos X s iniciais/finais da cena
 
 # ritmo de cada perfil: "alvos" = duracao que CADA plano deve ter, alternando
@@ -206,8 +224,10 @@ def aplicar_narracao(clip, caminho_audio, is_imagem, AudioFileClip, ImageClip, c
             clip = concatenate_videoclips([clip, congelado], method="chain")
 
     # Video bem maior que a narracao -> corta um pouco apos o fim da fala
-    elif clip.duration > audio.duration + 1.0:
-        clip = clip.with_duration(audio.duration + 0.4)
+    # (limiar de 1,0s deixava ate ~0,9s de "buraco mudo" entre cenas;
+    #  agora corta ja quando sobra meio segundo - cauda final de 0,3s)
+    elif clip.duration > audio.duration + 0.5:
+        clip = clip.with_duration(audio.duration + 0.3)
 
     return clip.with_audio(audio), audio
 
@@ -355,6 +375,100 @@ def _redimensionar_quadro(img, tw, th):
     else:
         saida = saida.astype(img.dtype)
     return saida
+
+
+def _alvo_por_formato(cenas, VideoFileClip, ImageClip):
+    """Escolhe a tela final seguindo FORMATO_ALVO (antes: cena 1 mandava).
+
+    - "auto" -> None (a PRIMEIRA cena define a tela, comportamento antigo);
+    - formato fixo -> a MAIOR cena que ja esta nesse formato (preserva a
+      melhor resolucao nativa), com piso da RESOLUCAO_MINIMA do formato;
+    - nenhuma cena no formato -> cai na resolucao minima (todas sao
+      recortadas em cover para o formato escolhido).
+    """
+    if not AJUSTAR_TAMANHO or FORMATO_ALVO == "auto":
+        return None
+    chave = str(FORMATO_ALVO).replace(" ", "")
+    minimo = RESOLUCAO_MINIMA.get(chave)
+    if minimo is None:
+        print(f"[!] FORMATO_ALVO desconhecido: {FORMATO_ALVO!r} - usando auto")
+        return None
+    try:
+        num, den = (int(x) for x in chave.split(":"))
+        razao = num / den
+    except Exception:
+        return minimo
+
+    melhor = None
+    for _ordem, arq in cenas:
+        try:
+            if arq.suffix.lower() in EXTENSOES_IMAGEM:
+                tmp = ImageClip(str(arq))
+                tam = tuple(tmp.size)
+                tmp.close()
+            else:
+                tmp = VideoFileClip(str(arq))
+                tam = tuple(tmp.size)
+                tmp.close()
+        except Exception:
+            continue
+        if not tam[1]:
+            continue
+        if abs((tam[0] / tam[1]) / razao - 1.0) <= 0.03:   # =/- 3% do formato
+            if melhor is None or tam[0] * tam[1] > melhor[0] * melhor[1]:
+                melhor = tam
+    if melhor is None:
+        print(f"[!] Nenhuma cena em {chave} - tela fixa no minimo "
+              f"{minimo[0]}x{minimo[1]} (cover em todas as cenas)")
+        return minimo
+    if melhor[0] < minimo[0] or melhor[1] < minimo[1]:
+        return minimo
+    return melhor
+
+
+def corrigir_reader_moviepy():
+    """Parcheia o FFMPEG_AudioReader.get_frame do MoviePy 2.1.2.
+
+    Bug real: quando a janela pedida cobre mais que buffersize//2 do
+    arquivo, o get_frame recursa passando a MASCARA BOOL (in_time[...])
+    no lugar dos timestamps - os True viram t=1.0 e arquivos com menos
+    de 1,0s derrubam o render com:
+
+        OSError: ... Accessing time t=1.00-1.00 seconds ...
+
+    (e arquivos de ~1,0 a ~2,3s leem um trecho errado, sem avisar).
+    Correcao cirurgica: recursar com os TEMPOS validos; buffer, EOF e
+    erros continuam sendo os do metodo original. Idempotente.
+    """
+    try:
+        from moviepy.audio.io import readers as _readers
+        classe = _readers.FFMPEG_AudioReader
+        original = classe.get_frame
+        if getattr(original, "_radar_corrigido", False):
+            return
+
+        def get_frame_corrigido(self, tt):
+            import numpy as np
+            if isinstance(tt, np.ndarray):
+                dentro = (tt >= 0) & (tt < self.duration)
+                if dentro.any():
+                    tempos = tt[dentro]
+                    quadros = np.round(self.fps * tempos).astype(int)
+                    limite = quadros.min() + self.buffersize // 2
+                    corte = int(np.searchsorted(quadros, limite,
+                                                side="right"))
+                    if corte != len(quadros):
+                        cabeca = self.get_frame(tempos[:corte])
+                        cauda = self.get_frame(tempos[corte:])
+                        saida = np.zeros((len(tt), self.nchannels))
+                        saida[dentro] = np.concatenate([cabeca, cauda])
+                        return saida
+            return original(self, tt)
+
+        get_frame_corrigido._radar_corrigido = True
+        classe.get_frame = get_frame_corrigido
+    except Exception as erro:
+        print(f"[!] patch do MoviePy nao aplicado: {erro}")
 
 
 def _montar_transform(espelhar: bool, flash: bool, zoom):
@@ -1313,6 +1427,7 @@ def principal():
         from moviepy import AudioFileClip, ImageClip, VideoFileClip, concatenate_videoclips
     except ImportError:
         sys.exit("ERRO: MoviePy nao instalado. Rode primeiro:\n   python -m pip install moviepy")
+    corrigir_reader_moviepy()   # SFX/arquivos curtos nao derrubam o render
 
     # 2. Pastas e cenas
     if not PASTA_CENAS.exists():
@@ -1349,7 +1464,11 @@ def principal():
 
     # 4. Carrega as cenas + narracao
     clips = []
-    alvo = None   # tela final = tamanho da PRIMEIRA cena (ver AJUSTAR_TAMANHO)
+    alvo = None   # tela final (AJUSTAR_TAMANHO + FORMATO_ALVO)
+    if AJUSTAR_TAMANHO:
+        alvo = _alvo_por_formato(cenas, VideoFileClip, ImageClip)
+        if alvo is not None:
+            print(f"[OK] Tela final ({FORMATO_ALVO}): {alvo[0]}x{alvo[1]}")
     audios = []
     com_narracao = 0
     resumo_cortes = []   # Fase 10: (numero, n_cortes) de cada cena
@@ -1366,9 +1485,10 @@ def principal():
             else:
                 clip = VideoFileClip(str(arq))
 
-            # Ajusta resolucoes diferentes a tela da cena 1 (cover + corte
-            # central) - sem isto o compose do MoviePy centraliza a cena
-            # menor com moldura preta (ou a tela vira quadrada)
+            # Ajusta resolucoes/formatos diferentes da tela final (cover +
+            # corte central) - sem isto o compose do MoviePy centraliza a
+            # cena menor com moldura preta (ou a tela vira quadrada).
+            # alvo vem de FORMATO_ALVO; se None ("auto"), a cena 1 define.
             if AJUSTAR_TAMANHO:
                 if alvo is None:
                     alvo = tuple(clip.size)
