@@ -20,13 +20,18 @@ except ImportError:
 
 load_dotenv()
 API_KEY = os.getenv("YOUTUBE_API_KEY")
+# chave GRATIS do youtube-transcript.ai (10 req/dia) - sem ela a fonte
+# "transcript.ai" da cadeia de transcricao e pulada (desde 12/10/2026
+# o endpoint sem chave responde 401)
+TRANSCRIPT_AI_KEY = os.getenv("TRANSCRIPT_AI_KEY")
 
 # ---------------------------------------------------------------------------
-# Busca de transcricao - cadeia de fontes gratuitas (sem chave propria):
-#   1) youtube-transcript.ai - a busca acontece NO SERVIDOR deles, entao
-#      nao depende do IP do Render (hoje, unico caminho que atravessa o
-#      bloqueio do YouTube contra IP de nuvem);
-#   2) API interna Innertube (cliente ANDROID) - contorna o captcha do site;
+# Busca de transcricao - cadeia de fontes gratuitas (sem chave paga):
+#   1) API interna Innertube (cliente ANDROID) - ilimitada, sem chave;
+#      hoje e a unica que nao exige cadastro, por isso roda primeiro;
+#   2) youtube-transcript.ai - busca no SERVIDOR deles (nao depende do
+#      IP do Render); desde 12/10/2026 exige chave GRATIS (10 req/dia,
+#      TRANSCRIPT_AI_KEY) - sem a chave a fonte e pulada;
 #   3) youtube-transcript-green (vercel) - cache parcial, reserva;
 #   4) instancias Piped - rede de seguranca.
 # ---------------------------------------------------------------------------
@@ -181,12 +186,15 @@ def search_viral_videos(query: str, max_results: int = 5, period: str = "all"):
         raise ValueError(f"Busca no YouTube falhou: {str(e)[:200]}") from e
 
 
-def _http_get(url: str, timeout: int = 12) -> str:
+def _http_get(url: str, timeout: int = 12, headers: dict = None) -> str:
     """GET simples fingindo ser um navegador (algumas instancias bloqueiam UA padrao)."""
-    req = urllib.request.Request(url, headers={
+    cabecais = {
         "User-Agent": _NAVEGADOR_UA,
         "Accept-Language": "pt-BR,pt,en;q=0.8",
-    })
+    }
+    if headers:
+        cabecais.update(headers)
+    req = urllib.request.Request(url, headers=cabecais)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8", errors="replace")
 
@@ -427,20 +435,23 @@ def _texto_do_markdown_ia(corpo: str) -> str:
 
 
 def _transcript_ia(video_id: str, timeout: int = 6) -> str:
-    """Transcricao via youtube-transcript.ai (gratis, sem chave e sem cadastro).
+    """Transcricao via youtube-transcript.ai (chave GRATIS - 10 req/dia).
 
-    GET https://youtube-transcript.ai/transcript/{ID}.txt - a fonte busca a
-    legenda no servidor DELA, por isso funciona mesmo com o YouTube
-    bloqueando o IP de nuvem do Render. Comportamento medido em teste:
+    GET https://youtube-transcript.ai/transcript/{ID}.txt com header
+    `Authorization: Bearer TRANSCRIPT_AI_KEY` - a fonte busca a legenda no
+    servidor DELA. Sem chave o endpoint responde 401 (desde 12/10/2026);
+    a cadeia so chama esta funcao quando a chave esta configurada.
+    Comportamento medido em teste:
       - User-Agent padrao do urllib leva 403: usa o UA de navegador;
       - 200 + `# Transcript:` = transcript real (~0,5 s, ~4 KB);
       - `# No captions available` = o video nao tem legenda (devolve '');
-      - 429 ou corpo ~240 B com "high volume" = rate limit deles (janela de
-        ~15-20 min): LANCA erro para a cadeia tentar a proxima fonte.
+      - 429 ou corpo ~240 B com "high volume" = rate limit deles: LANCA
+        erro para a cadeia tentar a proxima fonte.
     """
     corpo = _http_get(
         f"https://youtube-transcript.ai/transcript/{video_id}.txt",
         timeout=timeout,
+        headers={"Authorization": f"Bearer {TRANSCRIPT_AI_KEY}"},
     )
     c = corpo.lower()
     if "high volume" in c or "rate limited" in c:
@@ -497,9 +508,11 @@ def _transcript_green(video_id: str, timeout: int = 8) -> str:
 def get_video_transcript(video_id: str, relatorio: list = None) -> str:
     """Busca a transcricao do video (pt-BR > pt > en).
 
-    Cadeia de fontes (todas gratuitas, sem chave propria):
-    1) youtube-transcript.ai - busca no servidor deles (independe do IP);
-    2) API interna Innertube (variantes android/ios atuais) - nao cai no captcha;
+    Cadeia de fontes:
+    1) API interna Innertube (variantes android/ios) - ilimitada, sem chave;
+    2) youtube-transcript.ai - busca no servidor deles (independe do IP);
+       desde 12/10/2026 exige chave GRATIS (TRANSCRIPT_AI_KEY, 10 req/dia);
+       sem a chave a fonte nem e chamada;
     3) youtube-transcript-green - cache parcial, reserva;
     4) instancias Piped - 1 rodada, rede de seguranca.
     Toda a cadeia tem orcamento de ORCAMENTO_TRANSCRICAO segundos; se tudo
@@ -514,32 +527,39 @@ def get_video_transcript(video_id: str, relatorio: list = None) -> str:
         relatorio = []       # fonte/status/ms/chars de cada tentativa
     sem_legenda = False
 
-    # 1) youtube-transcript.ai - server-side (~0,5s), nao depende do IP
-    t0 = time.monotonic()
+    # 1) API interna Innertube (host da API do Google, depois youtube.com)
+    #    - roda primeiro por ser ilimitada e gratuita (economiza a cota
+    #      diaria do transcript.ai para quando ela falhar)
     try:
-        texto = _transcript_ia(video_id)
-        relatorio.append({"fonte": "transcript.ai",
-                          "status": "ok" if texto else "ok, sem legenda",
-                          "ms": int((time.monotonic() - t0) * 1000),
-                          "chars": len(texto)})
+        texto = _transcript_innertube(video_id, relatorio=relatorio)
         if texto:
             return texto
         sem_legenda = True   # fonte viva respondeu: o video nao tem legenda
-    except Exception as e:
-        relatorio.append({"fonte": "transcript.ai",
-                          "status": f"{type(e).__name__}: {str(e)[:70]}",
-                          "ms": int((time.monotonic() - t0) * 1000),
-                          "chars": 0})
+    except Exception:
+        pass   # cada tentativa ja entrou em `relatorio` com status e ms
 
-    # 2) API interna Innertube (host da API do Google, depois youtube.com)
+    # 2) youtube-transcript.ai - reserva server-side (chave gratis 10 req/dia)
     if not sem_legenda:
-        try:
-            texto = _transcript_innertube(video_id, relatorio=relatorio)
-            if texto:
-                return texto
-            sem_legenda = True   # fonte viva respondeu: o video nao tem legenda
-        except Exception:
-            pass   # cada tentativa ja entrou em `relatorio` com status e ms
+        if not TRANSCRIPT_AI_KEY:
+            relatorio.append({"fonte": "transcript.ai",
+                              "status": "pulado (sem TRANSCRIPT_AI_KEY)",
+                              "ms": 0, "chars": 0})
+        else:
+            t0 = time.monotonic()
+            try:
+                texto = _transcript_ia(video_id)
+                relatorio.append({"fonte": "transcript.ai",
+                                  "status": "ok" if texto else "ok, sem legenda",
+                                  "ms": int((time.monotonic() - t0) * 1000),
+                                  "chars": len(texto)})
+                if texto:
+                    return texto
+                sem_legenda = True   # fonte viva respondeu: sem legenda
+            except Exception as e:
+                relatorio.append({"fonte": "transcript.ai",
+                                  "status": f"{type(e).__name__}: {str(e)[:70]}",
+                                  "ms": int((time.monotonic() - t0) * 1000),
+                                  "chars": 0})
 
     # 3) youtube-transcript-green - so enquanto houver orcamento
     if not sem_legenda:

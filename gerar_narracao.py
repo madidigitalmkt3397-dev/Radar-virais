@@ -59,6 +59,32 @@ CORTE_GRAVE = 90           # Hz: corta grave morto abaixo disso
 GANHO_PRESENCA = 3         # dB: ganho na presenca da voz (~2500 Hz)
 GANHO_BRILHO = 2           # dB: ganho nos agudos (acima de 4000 Hz)
 
+# ---------- Ajuste Edge-TTS (host novo - issue #490 do edge-tts, 12/10/2026) ----------
+# A Microsoft passou a bloquear o host antigo (speech.platform.bing.com)
+# em varios paises (403 no handshake do WebSocket); o host NOVO
+# (api.msedgeservices.com) continua aceitando o token legado. Enquanto nao
+# sai versao nova do edge-tts com o suporte, o WSS aponta para la.
+# EDGE_TTS_HOST_NOVO = False = volta ao padrao do pacote.
+EDGE_TTS_HOST_NOVO = True
+
+
+def _ajustar_edge_tts():
+    """Redireciona o edge-tts para o host novo (workaround do 403)."""
+    if not EDGE_TTS_HOST_NOVO:
+        return
+    try:
+        import edge_tts.communicate as cm
+        from edge_tts.constants import TRUSTED_CLIENT_TOKEN
+        cm.WSS_URL = (
+            "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
+            f"?Ocp-Apim-Subscription-Key={TRUSTED_CLIENT_TOKEN}"
+        )
+    except Exception as e:
+        print(f"[!] ajuste do edge-tts pulado: {e}")
+
+
+_ajustar_edge_tts()
+
 
 async def _salvar_fala(texto: str, destino: Path):
     import edge_tts
