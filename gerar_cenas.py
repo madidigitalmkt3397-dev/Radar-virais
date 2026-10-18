@@ -7,7 +7,8 @@
    1. `roteiro.json` (baixado do site) nesta pasta
    2. Rode:  python gerar_cenas.py
    3. As imagens nascem em `cenas\\cena1.jpg`, `cena2.jpg`...
-      (cenas antigas sao movidas para `cenas\\_antigas\\<hora>\\`)
+      (imagens antigas da mesma cena sao substituidas na hora;
+      cenas com VIDEO manual cenaN.mp4 sao mantidas intactas)
    4. Depois: python gerar_narracao.py  ->  python render_video.py
 
  FONTE (100% gratis, sem chave e sem cadastro):
@@ -29,7 +30,6 @@
 import json
 import random
 import re
-import shutil
 import sys
 import time
 import urllib.error
@@ -45,7 +45,6 @@ if hasattr(sys.stdout, "reconfigure"):
 BASE = Path(__file__).resolve().parent
 ARQUIVO_ROTEIRO = BASE / "roteiro.json"
 PASTA_CENAS = BASE / "cenas"
-PASTA_BACKUP = PASTA_CENAS / "_antigas"
 
 URL_BASE = "https://image.pollinations.ai/prompt/"
 NAVEGADOR_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -60,6 +59,20 @@ ESPERA_ENTRE_IMAGENS = 48   # segundos entre pedidos (limite deles ~45s)
 TENTATIVAS_POR_CENA = 4     # inclui retentativas de 402 (limite por IP)
 ESPERA_MAX_402 = 300        # teto (s) para o Retry-After do 402
 TAMANHO_MINIMO = 8_000      # bytes: um JPEG valido passa de 8 KB
+
+# se existir cenaN.<ext de video> na pasta, a cena e MANUAL: o script
+# nao gera imagem nem move o arquivo (so preenche as cenas automaticas)
+EXTENSOES_VIDEO = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+def _tem_video_manual(numero: int) -> str:
+    """Devolve o nome do video manual da cenaN (ou '' se nao houver)."""
+    padrao = re.compile(rf"^cena{int(numero)}\.")
+    for arquivo in PASTA_CENAS.iterdir():
+        if (arquivo.is_file() and arquivo.suffix.lower() in EXTENSOES_VIDEO
+                and padrao.match(arquivo.name)):
+            return arquivo.name
+    return ""
 
 
 def _esperar_402(erro: urllib.error.HTTPError) -> None:
@@ -101,18 +114,20 @@ def _baixar_imagem(prompt: str, seed: int) -> bytes:
     raise RuntimeError(f"{type(ultimo_erro).__name__}: {ultimo_erro}")
 
 
-def _guardar_cenas_antigas(numero: int) -> list:
-    """Move cenaN.* antigos (video ou imagem) para cenas/_antigas/<hora>."""
+def _limpar_cenas_antigas(numero: int) -> int:
+    """Apaga imagens cenaN.* antigas - o arquivo novo substitui na hora.
+
+    Videos (manuais) nunca sao tocados aqui: cenas com video manual nem
+    chegam neste ponto (o loop principal as pula).
+    """
     padrao = re.compile(rf"^cena{int(numero)}\.")
-    alvos = [a for a in PASTA_CENAS.iterdir()
-             if a.is_file() and padrao.match(a.name)]
-    if not alvos:
-        return []
-    destino = PASTA_BACKUP / time.strftime("%H%M%S")
-    destino.mkdir(parents=True, exist_ok=True)
-    for arquivo in alvos:
-        shutil.move(str(arquivo), str(destino / arquivo.name))
-    return [a.name for a in alvos]
+    removidos = 0
+    for arquivo in list(PASTA_CENAS.iterdir()):
+        if (arquivo.is_file() and arquivo.suffix.lower() not in EXTENSOES_VIDEO
+                and padrao.match(arquivo.name)):
+            arquivo.unlink()
+            removidos += 1
+    return removidos
 
 
 def gerar_cenas() -> int:
@@ -137,11 +152,20 @@ def gerar_cenas() -> int:
     PASTA_CENAS.mkdir(exist_ok=True)
 
     geradas = 0
+    mantidas = 0
     falhas = []
     t_req_anterior = 0.0
 
     for cena in cenas:
         numero = int(cena.get("numero", 0))
+
+        # cena com video manual (baixado/feito por voce): nao mexe
+        manual = _tem_video_manual(numero)
+        if manual:
+            print(f"-> Cena {numero}: video manual ({manual}) - mantendo")
+            mantidas += 1
+            continue
+
         prompt = (cena.get("prompt_visual") or "").strip()
         if not prompt:
             prompt = (cena.get("narracao") or "").strip()
@@ -159,9 +183,9 @@ def gerar_cenas() -> int:
         try:
             dados = _baixar_imagem(prompt_final, seed=random.randint(1, 2_000_000_000))
             destino = PASTA_CENAS / f"cena{numero}.jpg"
-            movidos = _guardar_cenas_antigas(numero)
+            apagados = _limpar_cenas_antigas(numero)
             destino.write_bytes(dados)
-            extra = f" | backup: {', '.join(movidos)}" if movidos else ""
+            extra = f" | {apagados} imagem(ns) antiga(s) substituida(s)" if apagados else ""
             print(f" [OK] cena{numero}.jpg ({len(dados) // 1024} KB){extra}")
             geradas += 1
         except Exception as e:
@@ -171,6 +195,8 @@ def gerar_cenas() -> int:
     print("-" * 58)
     if geradas:
         print(f" PRONTO! {geradas} imagem(s) geradas em: {PASTA_CENAS}")
+    if mantidas:
+        print(f" ({mantidas} cena(s) com video manual mantida(s) intacta(s))")
     if falhas:
         print(f" [!] Cenas que falharam: {falhas} - rode de novo "
               "(as prontas serao substituidas).")

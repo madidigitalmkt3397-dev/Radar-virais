@@ -152,7 +152,12 @@ PERFIS_CORTES = {
 
 
 def descobrir_cenas():
-    """Lista os arquivos da pasta cenas/ ordenados pelo numero no nome."""
+    """Lista os arquivos da pasta cenas/ ordenados pelo numero no nome.
+
+    Se a MESMA cena tiver imagem e video (ex.: cena1.jpg automatica do
+    gerar_cenas.py + cena1.mp4 manual baixado), o VIDEO vence - assim da
+    para mesclar cenas automaticas com manuais sem apagar nada.
+    """
     encontrados = []
     for arq in sorted(PASTA_CENAS.iterdir()):
         if arq.name.startswith(".") or arq.suffix.lower() not in (EXTENSOES_VIDEO | EXTENSOES_IMAGEM):
@@ -160,8 +165,21 @@ def descobrir_cenas():
         m = re.search(r"(\d+)", arq.stem)
         ordem = int(m.group(1)) if m else 999
         encontrados.append((ordem, arq))
-    encontrados.sort(key=lambda t: (t[0], t[1].name.lower()))
-    return encontrados
+
+    # mesma cena com video + imagem automatica: fica so o video
+    melhor_por_numero = {}
+    for ordem, arq in encontrados:
+        atual = melhor_por_numero.get(ordem)
+        if atual is None:
+            melhor_por_numero[ordem] = (ordem, arq)
+            continue
+        video_novo = arq.suffix.lower() in EXTENSOES_VIDEO
+        video_atual = atual[1].suffix.lower() in EXTENSOES_VIDEO
+        if video_novo and not video_atual:
+            melhor_por_numero[ordem] = (ordem, arq)   # manual > automatica
+
+    return sorted(melhor_por_numero.values(),
+                  key=lambda t: (t[0], t[1].name.lower()))
 
 
 def localizar_narracao(numero: int):
