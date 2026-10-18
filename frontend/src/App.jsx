@@ -41,6 +41,9 @@ function PacoteViral({ pacote }) {
       {pacote.gancho && (
         <p style={{ margin: '4px 0' }}><strong>🪝 Gancho (0-3s):</strong> {pacote.gancho}</p>
       )}
+      {pacote.prompt_thumbnail && (
+        <p style={{ margin: '4px 0' }}><strong>🖼️ Thumbnail (prompt em inglês):</strong> {pacote.prompt_thumbnail}</p>
+      )}
       {pacote.descricao_otimizada && (
         <p style={{ margin: '4px 0' }}><strong>📝 Descrição otimizada:</strong> {pacote.descricao_otimizada}</p>
       )}

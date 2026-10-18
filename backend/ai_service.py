@@ -75,16 +75,33 @@ def montar_prompt_sistema(duracao_segundos: int) -> str:
     "conclusões que incentivem a reassistir (loop), sem promessas enganosas.\n"
     "- Clareza e autenticidade vencem o exagero: nada de clickbait que o conteúdo não "
     "cumpra.\n\n"
+    "ESTRATÉGIA DE CLIQUE (CTR) - o vídeo só é visto se título e thumbnail vencerem o "
+    "feed; retenção boa não adianta se ninguém clica:\n"
+    "- 'titulo_otimizado': no máximo 55 caracteres (evita corte no celular), em pt-BR, "
+    "com lacuna de curiosidade ESPECÍFICA. Fórmulas vencedoras: dado contraintuitivo "
+    "('Por que os cílios param de crescer?'), contradição ('Ele achava que era só "
+    "cansaço. Era isso.'), número + promessa ('3 sinais que ninguém percebe'), "
+    "stakes ('Se você faz isso à noite, pare agora'). NADA de perguntas genéricas "
+    "como 'O que você faria?'.\n"
+    "- 'prompt_thumbnail': conceito de thumbnail do vídeo em INGLÊS, mega chamativo e "
+    "legível em qualquer tamanho: expressão facial extrema (surpresa, choque, medo) ou "
+    "objeto em close dramático, NO MÁXIMO 2 elementos, alto contraste de cores "
+    "(ex.: luz vermelha intensa contra fundo escuro), composição central limpa. "
+    "PROIBIDO texto/letras na imagem (IAs de imagem erram a escrita - o criador "
+    "adiciona o texto depois, no editor). Sem métricas inventadas e sem pessoas "
+    "reais identificáveis.\n\n"
     "IDIOMA OBRIGATÓRIO: escreva 'titulo_otimizado', 'descricao_otimizada', 'gancho' e a "
     "'narracao' de TODAS as cenas SEMPRE em português do Brasil (pt-BR), independentemente "
-    "do idioma do vídeo de referência. Única exceção: 'prompt_visual' continua em inglês, "
-    "pois é uma instrução lida por IAs de imagem/vídeo (Midjourney, Runway, Sora).\n\n"
+    "do idioma do vídeo de referência. Única exceção: 'prompt_visual' e 'prompt_thumbnail' "
+    "continuam em inglês, pois são instruções lidas por IAs de imagem/vídeo "
+    "(Midjourney, Runway, Pollinations, Sora).\n\n"
     "Responda ESTRITAMENTE em JSON válido, seguindo exatamente este formato "
     "(sem markdown, sem texto fora do JSON):\n"
     "{\n"
     '  "titulo_otimizado": "string",\n'
     '  "descricao_otimizada": "string",\n'
     '  "gancho": "string (os 3 primeiros segundos exatos da narração)",\n'
+    '  "prompt_thumbnail": "prompt em inglês para a IA gerar a thumbnail (16:9) do vídeo",\n'
     '  "cenas": [\n'
     "    {\n"
     '      "numero": 1,\n'
@@ -98,7 +115,8 @@ def montar_prompt_sistema(duracao_segundos: int) -> str:
     f"{palavras_cena} palavras (frases curtas e diretas), "
     f"pensando em um vídeo de aproximadamente {duracao_segundos} segundos no total. "
     f"A soma de todas as narrações deve dar próximo de {duracao_segundos} segundos de fala falada.\n\n"
-    "LEMBRETE FINAL: tudo em português do Brasil (pt-BR) — exceto prompt_visual (inglês)."
+    "LEMBRETE FINAL: tudo em português do Brasil (pt-BR) — exceto prompt_visual e "
+    "prompt_thumbnail (inglês)."
 )
 
 
@@ -193,6 +211,7 @@ def analisar_e_criar_pacote_viral(
             "titulo_otimizado": titulo,
             "descricao_otimizada": "",
             "gancho": "",
+            "prompt_thumbnail": "",
             "cenas": [],
             "erro_formatacao": "A IA não devolveu um JSON válido desta vez. Tente novamente.",
             "conteudo_bruto": ultimo_texto_bruto,
